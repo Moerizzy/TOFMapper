@@ -1,0 +1,15 @@
+timm
+lightning
+albumentations
+ttach
+numpy
+tqdm
+opencv-python
+scipy
+matplotlib
+einops
+addict
+ftfy
+regex
+geopandas
+rasterio
