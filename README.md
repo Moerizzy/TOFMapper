@@ -1,7 +1,7 @@
 ## Introduction
 
-**TOFSeg** is an open-source  semantic segmentation toolbox based on PyTorch, [pytorch lightning](https://www.pytorchlightning.ai/) and [timm](https://github.com/rwightman/pytorch-image-models), 
-which mainly focuses on detecting Trees outside Forest in high resolution aerial images. Many thanks to [Libo Wang](https://github.com/WangLibo1995) for creating [GeoSeg](https://github.com/WangLibo1995/GeoSeg) from which this one is forked. For new updates regarding the Deep-Learning architectures please check [here](https://github.com/WangLibo1995/GeoSeg).
+**TOFMapper** is an open-source  semantic segmentation toolbox based on PyTorch, [pytorch lightning](https://www.pytorchlightning.ai/) and [timm](https://github.com/rwightman/pytorch-image-models), 
+which mainly focuses on detecting Trees outside Forest in high resolution aerial images. 
 
 
 ## Major Features
@@ -20,9 +20,7 @@ which mainly focuses on detecting Trees outside Forest in high resolution aerial
   
 - CNN
  
-  - [MANet](https://ieeexplore.ieee.org/abstract/document/9487010) 
   - [ABCNet](https://www.sciencedirect.com/science/article/pii/S0924271621002379)
-  - [A2FPN](https://www.tandfonline.com/doi/full/10.1080/01431161.2022.2030071)
   - [LSKNet](https://doi.org/10.1007/s11263-024-02247-9)
   - [U-Net](https://arxiv.org/abs/1505.04597)
   
@@ -30,10 +28,10 @@ which mainly focuses on detecting Trees outside Forest in high resolution aerial
 
 Prepare the following folders to organize this repo:
 ```none
-airs
-├── GeoSeg (code)
+Project
+├── TOFMapper (code)
 ├── pretrain_weights (pretrained weights of backbones, such as vit, swin, etc)
-├── model_weights (save the model weights trained on ISPRS vaihingen, LoveDA, etc)
+├── model_weights (save the model weights trained on your and our TOF data)
 ├── fig_results (save the masks predicted by models)
 ├── lightning_logs (CSV format training logs)
 ├── data
@@ -56,25 +54,30 @@ airs
 
 ## Install
 
-Open the folder **TOFSeg** using **Linux Terminal** and create python environment:
+Open the folder **Project** using **Linux Terminal** and create python environment:
 ```
-conda create -n airs python=3.8
-conda activate airs
+conda create -n TOFMapper python=3.8
+conda activate TOFMapper
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install -r GeoSeg/requirements.txt
+pip install -r TOFMapper/requirements.txt
 ```
 
 ## Pretrained Weights of Backbones
 
-[Baidu Disk](https://pan.baidu.com/s/1foJkxeUZwVi5SnKNpn6hfg) : 1234 
+[Download](https://myshare.uni-osnabrueck.de/d/f91f2814194a4e708822/)
 
-[Google Drive](https://drive.google.com/drive/folders/1ELpFKONJZbXmwB5WCXG7w42eHtrXzyPn?usp=sharing)
+## Trained Models for TOF Mapping and Classifcation
 
-## Trained Models for Trees outside Forest Segmentation
+| Model           | mIoU  | mF1   | Forest IoU | Forest F1 | Patch IoU | Patch F1 | Linear IoU | Linear F1 | Tree IoU | Tree F1 |
+|-----------------|-------|-------|------------|-----------|-----------|----------|------------|-----------|----------|---------|
+| ABCNet          | 0.709 | 0.821 | **0.971** | 0.944     | 0.532     | 0.695    | 0.739      | 0.850     | 0.622    | 0.767   |
+| BANet           | 0.656 | 0.777 | 0.937      | 0.967     | 0.422     | 0.593    | 0.689      | 0.816     | 0.575    | 0.730   |
+| DC-Swin         | 0.714 | 0.824 | 0.949      | 0.974     | 0.570     | 0.726    | 0.751      | 0.858     | 0.586    | 0.727   |
+| FT-UNetFormer   | **0.739** | **0.843** | 0.952      | **0.975** | **0.606** | **0.754** | **0.774**  | **0.872** | **0.626** | **0.770** |
+| LSKNet          | 0.697 | 0.812 | 0.943      | 0.971     | 0.545     | 0.705    | 0.718      | 0.836     | 0.582    | 0.736   |
+| U-Net           | 0.484 | 0.618 | 0.804      | 0.891     | 0.151     | 0.263    | 0.527      | 0.690     | 0.456    | 0.626   |
 
-[Download](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
-
-<img src="tof_val_stats.png" width="70%"/>
+[Download Model Weights](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
 
 ## Data Preprocessing
 
@@ -83,25 +86,25 @@ Create your own reference data using this [repository](https://github.com/Moeriz
 
 Create images (masks) in the same size as orthophotos from shapefiles.
 ```
-python GeoSeg/tools/create_masks.py --state "site name" --epsg "EPSG:25833"
+python TOFMapper/tools/create_masks.py --state "site name" --epsg "EPSG:25833"
 ```
 
 
 Define the training, validation and test split (here 90, 5, 5). This will split the data so that all classes are equally distributed. It is set up for 100 files.
 ```
-python GeoSeg/tools/data_statistics.py --state "site name"
+python TOFMapper/tools/data_statistics.py --state "site name"
 ```
 
 Copy the files into the designated training, validation and testing folders.
 ```
-python GeoSeg/tools/copy_files.py
+python TOFMapper/tools/copy_files.py
 ```
 
 ### Spliting the Data
 
 Generate the training set.
 ```
-python GeoSeg/tools/tof_patch_split.py \
+python TOFMapper/tools/tof_patch_split.py \
 --img-dir "data/tof/train_images" \
 --mask-dir "data/tof/train_masks" \
 --output-img-dir "data/tof/train/images_1024" \
@@ -110,7 +113,7 @@ python GeoSeg/tools/tof_patch_split.py \
 ```
 Generate the validation set.
 ```
-python GeoSeg/tools/tof_patch_split.py \
+python TOFMapper/tools/tof_patch_split.py \
 --img-dir "data/tof/val_images" \
 --mask-dir "data/tof/val_masks" \
 --output-img-dir "data/tof/val/images_1024" \
@@ -119,7 +122,7 @@ python GeoSeg/tools/tof_patch_split.py \
 ```
 Generate the testing set.
 ```
-python GeoSeg/tools/tof_patch_split.py \
+python TOFMapper/tools/tof_patch_split.py \
 --img-dir "data/tof/test_images" \
 --mask-dir "data/tof/test_masks" \
 --output-img-dir "data/tof/test/images_5000" \
@@ -132,7 +135,7 @@ python GeoSeg/tools/tof_patch_split.py \
 "-c" means the path of the config, use different **config** to train different models.
 
 ```
-python GeoSeg/train_supervision.py -c GeoSeg/config/tof/ftunetformer.py
+python TOFMapper/train_supervision.py -c TOFMapper/config/tof/ftunetformer.py
 ```
 
 ## Testing
@@ -146,7 +149,7 @@ python GeoSeg/train_supervision.py -c GeoSeg/config/tof/ftunetformer.py
 "--rgb" denotes whether to output masks in RGB format
 
 ```
-python GeoSeg/tof_test.py -c GeoSeg/config/tof/unetformer.py -o fig_results/tof/unetformer --rgb
+python TOFMapper/tof_test.py -c TOFMapper/config/tof/unetformer.py -o fig_results/tof/unetformer --rgb
 ```
 
 ## Inference on Huge Areas
@@ -169,9 +172,9 @@ This function takes an image folder and performs inference. It predicts overlapp
 
 
 ```
-python GeoSeg/inference_huge_image.py \
+python TOFMapper/inference_huge_image.py \
 -i data/inference/images \
--c GeoSeg/config/tof/ftunetformer.py \
+-c TOFMapper/config/tof/ftunetformer.py \
 -o data/inference/mask \
 -st 256 \
 -ps 1024 \
@@ -180,17 +183,13 @@ python GeoSeg/inference_huge_image.py \
 
 ## Citation
 
-If you find this project useful in your research, please consider citing：
-
-- [Mapping Trees Outside Forests Using Semantic Segmentation](https://doi.org/10.1109/IGARSS53475.2024.10641035)
-
-
+Comming soon!
 
 ## Acknowledgement
 
-We hope that **TOFSeg** will serve the growing remote sensing research community by providing a benchmark for tree segmentation outside of forests. 
-and inspire researchers to develop their own segmentation networks. Many thanks to the following projects for their contributions to **TOFSeg**.
-- [GeoSeg](https://github.com/WangLibo1995/GeoSeg)
+Many thanks to [Libo Wang](https://github.com/WangLibo1995) for creating [TOFMapper](https://github.com/WangLibo1995/GeoSeg), which served as the foundation for this project. For the latest updates on deep learning architectures, please check [here](https://github.com/WangLibo1995/GeoSeg).
+
+- [TOFMapper](https://github.com/WangLibo1995/TOFMapper)
 - [pytorch lightning](https://www.pytorchlightning.ai/)
 - [timm](https://github.com/rwightman/pytorch-image-models)
 - [pytorch-toolbelt](https://github.com/BloodAxe/pytorch-toolbelt)
