@@ -89,7 +89,6 @@ Create images (masks) in the same size as orthophotos from shapefiles.
 python TOFMapper/tools/create_masks.py --state "site name" --epsg "EPSG:25833"
 ```
 
-
 Define the training, validation and test split (here 90, 5, 5). This will split the data so that all classes are equally distributed. It is set up for 100 files.
 ```
 python TOFMapper/tools/data_statistics.py --state "site name"
