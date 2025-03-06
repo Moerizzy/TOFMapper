@@ -1,7 +1,4 @@
 import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
-
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from tools.cfg import py2cfg

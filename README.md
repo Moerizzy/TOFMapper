@@ -130,9 +130,9 @@ Generate the testing set.
 python TOFMapper/tools/tof_patch_split.py \
 --img-dir "data/tof/test_images" \
 --mask-dir "data/tof/test_masks" \
---output-img-dir "data/tof/test/images_5000" \
---output-mask-dir "data/tof/test/masks_5000" \
---mode "val" --split-size 5000 --stride 5000 \
+--output-img-dir "data/tof/test/images" \
+--output-mask-dir "data/tof/test/masks" \
+--mode "val" --split-size 1024 --stride 1024 \
 ```
 
 ## Training
