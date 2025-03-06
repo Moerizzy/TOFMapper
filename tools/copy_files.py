@@ -2,6 +2,45 @@ import argparse
 import shutil
 import os
 
+"""
+Usage:
+    python copy_files.py [--sites SITE [SITE ...]] [--dest_train_images PATH]
+                         [--dest_train_masks PATH] [--dest_val_images PATH]
+                         [--dest_val_masks PATH] [--dest_test_images PATH]
+                         [--dest_test_masks PATH]
+
+Description:
+    This script copies image and mask files into designated training, validation, 
+    and testing folders. It reads file paths from text files located in each site's 
+    "data/sites/{site}/Stats" directory and then copies the corresponding files to the 
+    destination directories. Remaining files are copied to the training set.
+
+Arguments:
+    --sites             List of site names to process (default: ["BB", "NRW_1", "NRW_3", "SH"])
+    --dest_train_images Destination folder for training images (default: data/tof/train_images)
+    --dest_train_masks  Destination folder for training masks (default: data/tof/train_masks)
+    --dest_val_images   Destination folder for validation images (default: data/tof/val_images)
+    --dest_val_masks    Destination folder for validation masks (default: data/tof/val_masks)
+    --dest_test_images  Destination folder for test images (default: data/tof/test_images)
+    --dest_test_masks   Destination folder for test masks (default: data/tof/test_masks)
+
+Examples:
+    1. Run with default settings:
+        python copy_files.py
+
+    2. Process only two sites and use custom destination directories:
+        python copy_files.py --sites SITE_A SITE_B \
+            --dest_train_images "custom/train_images" \
+            --dest_train_masks "custom/train_masks" \
+            --dest_val_images "custom/val_images" \
+            --dest_val_masks "custom/val_masks" \
+            --dest_test_images "custom/test_images" \
+            --dest_test_masks "custom/test_masks"
+
+    3. Process a different list of sites with default folder paths:
+        python copy_files.py --sites SITE_X SITE_Y SITE_Z
+"""
+
 
 def copy_files(
     sites,

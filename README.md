@@ -96,7 +96,13 @@ python TOFMapper/tools/data_statistics.py --state "site name"
 
 Copy the files into the designated training, validation and testing folders.
 ```
-python TOFMapper/tools/copy_files.py
+python copy_files.py --sites SITE_A SITE_B \
+            --dest_train_images "custom/train_images" \
+            --dest_train_masks "custom/train_masks" \
+            --dest_val_images "custom/val_images" \
+            --dest_val_masks "custom/val_masks" \
+            --dest_test_images "custom/test_images" \
+            --dest_test_masks "custom/test_masks"
 ```
 
 ### Spliting the Data
