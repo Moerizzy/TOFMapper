@@ -137,7 +137,7 @@ python TOFMapper/tools/tof_patch_split.py \
 
 ## Training
 
-"-c" means the path of the config, use different **config** to train different models.
+"-c" path of the config, use different **config** to train different models.
 
 ```
 python TOFMapper/train_supervision.py -c TOFMapper/config/tof/ftunetformer.py
@@ -192,7 +192,7 @@ Comming soon!
 
 ## Acknowledgement
 
-Many thanks to [Libo Wang](https://github.com/WangLibo1995) for creating [TOFMapper](https://github.com/WangLibo1995/GeoSeg), which served as the foundation for this project. For the latest updates on deep learning architectures, please check [here](https://github.com/WangLibo1995/GeoSeg).
+Many thanks to [Libo Wang](https://github.com/WangLibo1995) for creating [TOFSeg](https://github.com/WangLibo1995/GeoSeg), which served as the foundation for this project.
 
 - [TOFMapper](https://github.com/WangLibo1995/TOFMapper)
 - [pytorch lightning](https://www.pytorchlightning.ai/)
