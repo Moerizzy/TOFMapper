@@ -1,14 +1,14 @@
 ## Introduction
 
 **TOFMapper** is an open-source  semantic segmentation toolbox based on PyTorch, [pytorch lightning](https://www.pytorchlightning.ai/) and [timm](https://github.com/rwightman/pytorch-image-models), 
-which mainly focuses on detecting Trees outside Forest in high resolution aerial images. 
+which mainly focuses on mapping and classifying Trees outside Forest in high resolution aerial images. 
 
 
 ## Major Features
 
 - Segmentation and classification of aerial imagery into four trees outside forest classes (Forest, Patch, Linear, Tree)
 - Six trained models [available](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
-- Can handle large inference images by slicing and stitching them together using overlapping predictions
+- Can handle large inference images by slicing and stitching patches and neighboring images prevending edge effects
 
 ## Supported Networks
 
@@ -81,7 +81,12 @@ pip install -r TOFMapper/requirements.txt
 
 ## Data Preprocessing
 
+### Download Reference Data
+
+Download the reference data created for model training [here](https://myshare.uni-osnabrueck.de/d/c8ec072f5f06426d90c8/).
+
 ### Create Reference Data (optional)
+
 Create your own reference data using this [repository](https://github.com/Moerizzy/Manual_TOF_Detection.git). Be aware that manual refinement will be required!
 
 Create images (masks) in the same size as orthophotos from shapefiles.
@@ -145,21 +150,19 @@ python TOFMapper/train_supervision.py -c TOFMapper/config/tof/ftunetformer.py
 
 ## Testing
 
+Testing is made to work on larger images without pre-cutting. A sliding window extracts overlapping patches to generate softmax predictions, which are then merged by averaging and majority voting. This approach improves boundary segmentation.
+
 "-c" denotes the path of the config, Use different **config** to test different models. 
 
 "-o" denotes the output path 
-
-"-t" denotes the test time augmentation (TTA), can be [None, 'lr', 'd4'], default is None, 'lr' is flip TTA, 'd4' is multiscale TTA
-
-"--rgb" denotes whether to output masks in RGB format
 
 ```
 python TOFMapper/tof_test.py -c TOFMapper/config/tof/unetformer.py -o fig_results/tof/unetformer --rgb
 ```
 
-## Inference on Huge Areas
+## Inference with Overlap
 
-This function takes an image folder and performs inference. It predicts overlapping predictions, which can be adjusted using "-st" and "-ps". These are merged by averaging the probability scores and output as a georeferenced GeoTIF and ShapeFile in the size of the original images.
+This function is particularly suitable to tackle edge problems and operate over vast geographic extents. This script performs inference on a folder of georeferenced images using a sliding window approach with adjustable patch size (-ps) and stride (-st). It keeps only the inner part of every patch (-kr) to reduce boundary effects, averaging overlapping softmax scores to generate robust predictions. The script also combines neighboring images for added context and preserves the original geospatial metadata. Predictions are output as a GeoTIF and then converted to a shapefile. 
 
 "i" denotes the input image folder 
 
@@ -167,23 +170,27 @@ This function takes an image folder and performs inference. It predicts overlapp
 
 "-o" denotes the output path 
 
-"-t" denotes the test time augmentation (TTA), can be [None, 'lr', 'd4'], default is None, 'lr' is flip TTA, 'd4' is multiscale TTA
+"-st" stride for the sliding window (in pixels).
 
-"-st" denotes the stride in pixels for each patch that will be predicted.
+"-ps" Patch size for inference
 
-"-ps" denotes the patch size that will be predicted
+"-b" Batch size
 
-"-b" denoted the batch size
+"-m" Margin size for neighboring images.
+
+"-kr" Ratio of patch to keep during inference.
 
 
 ```
-python TOFMapper/inference_huge_image.py \
--i data/inference/images \
+python TOFMapper/inference_with_overlap.py \
+-i path/to/images \
 -c TOFMapper/config/tof/ftunetformer.py \
--o data/inference/mask \
+-o path/to/output \
 -st 256 \
 -ps 1024 \
 -b 2 \
+-m 500 \
+-kr 0.7
 ```
 
 ## Citation
