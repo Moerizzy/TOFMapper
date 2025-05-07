@@ -102,12 +102,12 @@ class TOFDataset(Dataset):
             img, mask = self.transform(img, mask)
 
         # ⚠️ Masken-Werte prüfen und ggf. reparieren
-        num_classes = len(CLASSES)
+        num_classes = len(CLASSES) - 1
         if np.any(mask >= num_classes):
             print(
                 f"[Dataset] ⚠️ Ungültige Werte in Maske bei Index {index}: {np.unique(mask)}"
             )
-            mask[mask >= num_classes] = 255  # oder dein ignore_index
+            mask[mask >= num_classes] = len(CLASSES)  # oder dein ignore_index
 
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         mask = torch.from_numpy(mask).long()
