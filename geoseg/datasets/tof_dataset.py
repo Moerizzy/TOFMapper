@@ -97,6 +97,18 @@ class TOFDataset(Dataset):
             if self.transform:
                 img, mask = self.transform(img, mask)
 
+            # 🧪 Sanity-Check nach Transform
+        if self.transform:
+            img, mask = self.transform(img, mask)
+
+        # ⚠️ Masken-Werte prüfen und ggf. reparieren
+        num_classes = len(CLASSES)
+        if np.any(mask >= num_classes):
+            print(
+                f"[Dataset] ⚠️ Ungültige Werte in Maske bei Index {index}: {np.unique(mask)}"
+            )
+            mask[mask >= num_classes] = 255  # oder dein ignore_index
+
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         mask = torch.from_numpy(mask).long()
         img_id = self.img_ids[index]
