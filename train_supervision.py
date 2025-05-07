@@ -127,8 +127,11 @@ class Supervision_Train(pl.LightningModule):
         print("mask unique:", torch.unique(mask))
 
         num_classes = prediction.shape[1]
-        if not torch.all((mask >= 0) & (mask < num_classes)):
-            print("❌ Ungültige Werte in der Maske gefunden!")
+        valid_classes = list(range(num_classes)) + [5]
+        if not torch.all(
+            torch.isin(mask, torch.tensor(valid_classes, device=mask.device))
+        ):
+            print("❌ Ungültige Werte in der Maske:", torch.unique(mask))
             torch.save(mask, f"bad_mask_{batch_idx}.pt")
             torch.save(prediction, f"bad_prediction_{batch_idx}.pt")
             raise ValueError("Ungültige Klassenwerte in der Maske!")
