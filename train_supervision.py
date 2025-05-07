@@ -116,6 +116,23 @@ class Supervision_Train(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         img, mask = batch["img"], batch["gt_semantic_seg"]
         prediction = self.forward(img)
+
+        # 🧠 Debug: prüfe vor Loss
+        print(f"\n🚨 [DEBUG] Batch {batch_idx}")
+        print("prediction shape:", prediction.shape)
+        print("prediction dtype:", prediction.dtype)
+        print("mask shape:", mask.shape)
+        print("mask dtype:", mask.dtype)
+        print("mask min:", mask.min().item(), "max:", mask.max().item())
+        print("mask unique:", torch.unique(mask))
+
+        num_classes = prediction.shape[1]
+        if not torch.all((mask >= 0) & (mask < num_classes)):
+            print("❌ Ungültige Werte in der Maske gefunden!")
+            torch.save(mask, f"bad_mask_{batch_idx}.pt")
+            torch.save(prediction, f"bad_prediction_{batch_idx}.pt")
+            raise ValueError("Ungültige Klassenwerte in der Maske!")
+
         pre_mask = nn.Softmax(dim=1)(prediction)
         pre_mask = pre_mask.argmax(dim=1)
         for i in range(mask.shape[0]):
