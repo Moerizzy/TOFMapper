@@ -79,7 +79,7 @@ def get_img_mask_padded(image, mask, patch_size, mode):
         min_width=w,
         position="bottom_right",
         border_mode=cv2.BORDER_CONSTANT,
-        value=6,
+        value=255,
     )(image=mask)
     img_pad, mask_pad = pad_img["image"], pad_mask["image"]
     img_pad = cv2.cvtColor(np.array(img_pad), cv2.COLOR_RGB2BGR)

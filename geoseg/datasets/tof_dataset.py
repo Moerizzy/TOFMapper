@@ -97,15 +97,6 @@ class TOFDataset(Dataset):
             if self.transform:
                 img, mask = self.transform(img, mask)
 
-        # ⚠️ Masken-Werte prüfen und ggf. reparieren
-        num_classes = len(CLASSES) - 1
-        unique_vals = np.unique(mask)
-        if np.any(unique_vals >= num_classes):
-            print(
-                f"[Dataset] ⚠️ Ungültige Werte in Maske bei Index {index}: {unique_vals}"
-            )
-            mask[mask >= num_classes] = len(CLASSES)  # oder dein ignore_index
-
         img = torch.from_numpy(img).permute(2, 0, 1).float()
         mask = torch.from_numpy(mask).long()
         img_id = self.img_ids[index]

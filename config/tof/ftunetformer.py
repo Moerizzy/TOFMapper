@@ -7,7 +7,7 @@ from tools.utils import process_model_params
 
 # training hparam
 max_epoch = 100
-ignore_index = len(CLASSES)
+ignore_index = 255
 train_batch_size = 4
 val_batch_size = 4
 lr = 6e-4
@@ -51,7 +51,7 @@ train_dataset = TOFDataset(
     data_root="data/tof/train", mode="test", mosaic_ratio=0.25, transform=train_aug
 )
 
-val_dataset = TOFDataset(data_root="data/tof/val", transform=val_aug, mode="train")
+val_dataset = TOFDataset(data_root="data/tof/val", transform=val_aug, mode="test")
 test_dataset = TOFDataset(
     data_root="data/tof/test",
     transform=val_aug,
