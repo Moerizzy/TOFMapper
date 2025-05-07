@@ -97,15 +97,12 @@ class TOFDataset(Dataset):
             if self.transform:
                 img, mask = self.transform(img, mask)
 
-            # 🧪 Sanity-Check nach Transform
-        if self.transform:
-            img, mask = self.transform(img, mask)
-
         # ⚠️ Masken-Werte prüfen und ggf. reparieren
         num_classes = len(CLASSES) - 1
-        if np.any(mask >= num_classes):
+        unique_vals = np.unique(mask)
+        if np.any(unique_vals >= num_classes):
             print(
-                f"[Dataset] ⚠️ Ungültige Werte in Maske bei Index {index}: {np.unique(mask)}"
+                f"[Dataset] ⚠️ Ungültige Werte in Maske bei Index {index}: {unique_vals}"
             )
             mask[mask >= num_classes] = len(CLASSES)  # oder dein ignore_index
 
