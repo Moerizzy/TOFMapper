@@ -135,7 +135,7 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
 
     # First, handle the center image
     with rasterio.open(center_image) as src:
-        center_data = src.read()
+        center_data = src.read()[:3, :, :]
         center_h = (output_shape[1] - center_data.shape[1]) // 2
         center_w = (output_shape[2] - center_data.shape[2]) // 2
         combined[
