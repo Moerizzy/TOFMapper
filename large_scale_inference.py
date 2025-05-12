@@ -84,9 +84,7 @@ class InferenceDataset(Dataset):
         neighbors = find_neighbors(image_path)
 
         # Calculate margin based on image size
-        margin = calculate_margin(
-            patch_size=config.patch_size, keep_ratio=config.keep_ratio
-        )
+        margin = calculate_margin(self.patch_size, self.keep_ratio)
         output_shape = (3, height + 2 * margin, width + 2 * margin)
 
         combined_image = combine_neighbors(
