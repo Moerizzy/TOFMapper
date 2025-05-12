@@ -40,20 +40,10 @@ def get_args():
         "-c", "--config_path", required=True, help="Path to the configuration file."
     )
     parser.add_argument(
-        "-st", "--stride", type=int, default=256, help="Stride size for sliding window."
-    )
-    parser.add_argument(
         "-ps", "--patch_size", type=int, default=1024, help="Patch size for inference."
     )
     parser.add_argument(
         "-b", "--batch_size", type=int, default=2, help="Batch size for inference."
-    )
-    parser.add_argument(
-        "-m",
-        "--margin",
-        type=int,
-        default=500,
-        help="Margin size for neighboring images.",
     )
     parser.add_argument(
         "-kr",
@@ -65,9 +55,15 @@ def get_args():
     return parser.parse_args()
 
 
+def calculate_margin(patch_size, keep_ratio):
+    return int((1 - keep_ratio) * patch_size / 2)
+
+
 class InferenceDataset(Dataset):
     def __init__(self, image_dir, transform=None):
         self.image_dir = image_dir
+        self.patch_size = patch_size
+        self.keep_ratio = keep_ratio
         self.transform = transform
         self.image_files = sorted(
             [f for f in os.listdir(image_dir) if f.endswith((".tif", ".png", ".jpg"))]
@@ -88,7 +84,9 @@ class InferenceDataset(Dataset):
         neighbors = find_neighbors(image_path)
 
         # Calculate margin based on image size
-        margin = min(500, min(height, width) // 4)
+        margin = calculate_margin(
+            patch_size=config.patch_size, keep_ratio=config.keep_ratio
+        )
         output_shape = (3, height + 2 * margin, width + 2 * margin)
 
         combined_image = combine_neighbors(
@@ -185,9 +183,9 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
 def sliding_window_inference(
     model, image, num_classes, patch_size=1024, keep_ratio=0.7
 ):
-    stride = int(patch_size * keep_ratio)
     inner_size = int(patch_size * keep_ratio)
     outer_margin = (patch_size - inner_size) // 2
+    stride = inner_size  # No overlap
 
     batch_size, _, H, W = image.shape
 
@@ -199,9 +197,6 @@ def sliding_window_inference(
 
     # Initialize prediction tensor
     prediction = torch.zeros(
-        (batch_size, num_classes, padded_H, padded_W), device=image.device
-    )
-    count = torch.zeros(
         (batch_size, num_classes, padded_H, padded_W), device=image.device
     )
 
@@ -225,16 +220,6 @@ def sliding_window_inference(
                 outer_margin : outer_margin + inner_size,
                 outer_margin : outer_margin + inner_size,
             ]
-            count[
-                :,
-                :,
-                h + outer_margin : h + outer_margin + inner_size,
-                w + outer_margin : w + outer_margin + inner_size,
-            ] += 1
-
-    # Average predictions
-    valid_mask = count > 0
-    prediction = torch.where(valid_mask, prediction / count, prediction)
 
     # Crop back to original image size
     prediction = prediction[:, :, :H, :W]
@@ -255,7 +240,12 @@ def main():
     model = torch.nn.DataParallel(model)
     model.eval()
 
-    dataset = InferenceDataset(image_dir=args.image_path, transform=albu.Normalize())
+    dataset = InferenceDataset(
+        image_dir=args.image_path,
+        patch_size=args.patch_size,
+        keep_ratio=args.keep_ratio,
+        transform=albu.Normalize(),
+    )
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     os.makedirs(args.output_path, exist_ok=True)

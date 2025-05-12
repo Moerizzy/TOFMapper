@@ -162,7 +162,7 @@ Testing is made to work on larger images without pre-cutting. A sliding window e
 python TOFMapper/tof_test.py -c TOFMapper/config/tof/unetformer.py -o fig_results/tof/unetformer --rgb
 ```
 
-## Inference with Overlap
+## Large Scale Inference
 
 This function is particularly suitable to tackle edge problems and operate over vast geographic extents. This script performs inference on a folder of georeferenced images using a sliding window approach with adjustable patch size (-ps) and stride (-st). It keeps only the inner part of every patch (-kr) to reduce boundary effects, averaging overlapping softmax scores to generate robust predictions. The script also combines neighboring images for added context and preserves the original geospatial metadata. Predictions are output as a GeoTIF and then converted to a shapefile. 
 
@@ -172,26 +172,20 @@ This function is particularly suitable to tackle edge problems and operate over 
 
 "-o" denotes the output path 
 
-"-st" stride for the sliding window (in pixels).
-
 "-ps" Patch size for inference
 
 "-b" Batch size
-
-"-m" Margin size for neighboring images.
 
 "-kr" Ratio of patch to keep during inference.
 
 
 ```
-python TOFMapper/inference_with_overlap.py \
+python TOFMapper/large_scale_inference.py \
 -i path/to/images \
 -c TOFMapper/config/tof/ftunetformer.py \
 -o path/to/output \
--st 256 \
 -ps 1024 \
 -b 2 \
--m 500 \
 -kr 0.7
 ```
 
