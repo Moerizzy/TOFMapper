@@ -60,7 +60,7 @@ def calculate_margin(patch_size, keep_ratio):
 
 
 class InferenceDataset(Dataset):
-    def __init__(self, image_dir, transform=None):
+    def __init__(self, image_dir, patch_size, keep_ratio, transform=None):
         self.image_dir = image_dir
         self.patch_size = patch_size
         self.keep_ratio = keep_ratio
