@@ -284,7 +284,8 @@ def main():
         )
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
 
-        print(torch.unique(predictions))
+        for i, name in enumerate(image_names):
+            print(f"🖼️  {name} → Klassen: {torch.unique(predictions[i]).tolist()}")
 
         for i in range(len(images)):
             prediction = predictions[i]
