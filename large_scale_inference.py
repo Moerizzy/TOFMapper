@@ -100,6 +100,9 @@ class InferenceDataset(Dataset):
 
         image = torch.tensor(image).permute(2, 0, 1).float()
 
+        print(f"📷 Loading: {image_name}")
+        print(f"   Original size: {height}x{width}, with margin: {margin}")
+
         return {
             "image": image,
             "image_name": image_name,
@@ -199,12 +202,20 @@ def sliding_window_inference(
         (batch_size, num_classes, padded_H, padded_W), device=image.device
     )
 
+    print(f"   Starting sliding window inference...")
+    print(f"   Image shape: {image.shape}")
+    print(f"   Patch size: {patch_size}, keep ratio: {keep_ratio}")
+    print(
+        f"   Stride: {stride}, Inner size: {inner_size}, Outer margin: {outer_margin}"
+    )
+
     # Sliding window inference
     for h in range(0, padded_H - patch_size + 1, stride):
         for w in range(0, padded_W - patch_size + 1, stride):
+            print(f"      Patch at (h={h}, w={w})")
             window = image[:, :, h : h + patch_size, w : w + patch_size]
             with torch.no_grad():
-                with autocast():
+                with torch.amp.autocast("cuda"):
                     output = model(window)
 
             # Update predictions with inner part of the output
@@ -250,6 +261,11 @@ def main():
     os.makedirs(args.output_path, exist_ok=True)
 
     for batch in tqdm(dataloader, desc="Processing Images"):
+        # Logging batch size and image names
+        print(f"\n➡️  Processing batch with {len(batch['image'])} image(s)")
+        print(f"   Image names: {batch['image_name']}")
+
+        # Move images to GPU
         images = batch["image"].cuda()
         image_names = batch["image_name"]
 
