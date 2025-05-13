@@ -281,6 +281,8 @@ def main():
         )
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
 
+        print(torch.unique(predictions))
+
         for i in range(len(images)):
             prediction = predictions[i]
             prediction_np = prediction.cpu().numpy().astype(np.uint8)
