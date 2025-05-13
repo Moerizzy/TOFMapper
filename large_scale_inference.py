@@ -218,6 +218,9 @@ def sliding_window_inference(
                 with torch.amp.autocast("cuda"):
                     output = model(window)
 
+            print(
+                f"         Output shape from model: {output.shape}, max val: {output.max().item():.4f}"
+            )
             # Update predictions with inner part of the output
             prediction[
                 :,
