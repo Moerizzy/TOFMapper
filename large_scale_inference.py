@@ -150,6 +150,7 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
         src_files = [rasterio.open(neighbor) for neighbor in valid_neighbors]
         try:
             mosaic, transform = merge(src_files)
+            mosaic = mosaic[:3, :, :]  # force to RGB
 
             # Ensure mosaic doesn't exceed output dimensions
             mosaic_h = min(mosaic.shape[1], output_shape[1])
