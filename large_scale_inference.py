@@ -238,73 +238,62 @@ def sliding_window_inference_batched(
     return prediction
 
 
-def merge_touching_polygons_with_threshold(
-    shp_path, output_path, area_threshold=100, min_area=1
-):
-    gdf = gpd.read_file(shp_path)
+import geopandas as gpd
+import pandas as pd
+import networkx as nx
+from shapely.ops import unary_union
+
+
+def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_area=1):
+    # Step 1: Clean invalid geometries and remove class 0
     gdf = gdf[gdf.is_valid].copy()
-
-    # 1. Remove class 0
     gdf = gdf[gdf["DN"] != 0].copy()
-
-    # 2. Compute area and spatial index
     gdf["area"] = gdf.geometry.area
     gdf = gdf.reset_index(drop=True)
+
+    # Step 2: Build spatial index
     sindex = gdf.sindex
 
-    merged_polygons = []
-    merged_classes = []
-    visited = set()
+    # Step 3: Create graph of connected polygons
+    G = nx.Graph()
 
     for i, row in gdf.iterrows():
-        if i in visited:
-            continue
+        G.add_node(i)
 
-        geom = row.geometry
-        class_dn = row["DN"]
-        area = row["area"]
+        geom_i = row.geometry
+        area_i = row.area
 
-        # 3. Find touching neighbors
-        possible_matches_index = list(sindex.intersection(geom.bounds))
-        if i in possible_matches_index:
-            possible_matches_index.remove(i)
+        possible_matches_index = list(sindex.intersection(geom_i.bounds))
+        possible_matches_index.remove(i)
 
-        touching = []
         for j in possible_matches_index:
-            if j in visited:
-                continue
-            other = gdf.loc[j]
-            if geom.intersects(other.geometry) and not (
-                geom.area >= area_threshold and other.area >= area_threshold
-            ):
-                touching.append((j, other))
+            geom_j = gdf.geometry[j]
+            area_j = gdf.area[j]
 
-        if touching:
-            group = [(i, row)] + touching
-            total_geom = unary_union([g.geometry for _, g in group])
+            if geom_i.buffer(0.5).intersects(geom_j):
+                # Don't connect two large polygons
+                if not (area_i >= area_threshold and area_j >= area_threshold):
+                    G.add_edge(i, j)
 
-            # Class of the largest polygon
-            largest = max(group, key=lambda g: g[1].area)
-            merged_polygons.append(total_geom)
-            merged_classes.append(largest[1]["DN"])
-            visited.update([idx for idx, _ in group])
-        else:
-            # No merge → keep original
-            merged_polygons.append(geom)
-            merged_classes.append(class_dn)
-            visited.add(i)
+    # Step 4: Merge connected components
+    merged_polygons = []
+    merged_classes = []
 
-    # 4. Create output GeoDataFrame
+    for component in nx.connected_components(G):
+        group = gdf.loc[list(component)]
+        merged_geom = unary_union(group.geometry)
+        largest = group.sort_values("area", ascending=False).iloc[0]
+        merged_polygons.append(merged_geom)
+        merged_classes.append(largest["DN"])
+
+    # Step 5: Build result GeoDataFrame and clean up
     result = gpd.GeoDataFrame(
         {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
     )
-
-    # 5. Remove very small remaining polygons
     result["area"] = result.geometry.area
     result = result[result["area"] >= min_area].copy()
 
-    result.to_file(output_path)
-    print(f"✅ Done! Output saved to {output_path}")
+    return result
 
 
 def main():
@@ -398,11 +387,12 @@ def main():
                 f"{output_file.replace('.tif', '.shp')}"
             )
             # Merge small touching polygons
-            merge_touching_polygons_with_threshold(
-                output_file.replace(".tif", ".shp"),
-                output_file.replace(".tif", "_merged.shp"),
-                area_threshold=100,
-                min_area=1,
+            gdf = gpd.read_file(output_file.replace(".tif", ".shp"))
+            result = merge_touching_polygons_connected_components(
+                gdf, area_threshold=100, min_area=1
+            )
+            result.to_file(
+                output_file.replace(".tif", "_merged.shp"), driver="ESRI Shapefile"
             )
 
         end_time = time.time()
