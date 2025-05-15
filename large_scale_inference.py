@@ -433,7 +433,7 @@ def process_image(image_path):
     return output_gpkg
 
 
-def run_parallel_polygonization(image_paths, max_workers=None):
+def run_parallel_polygonization(image_paths, max_workers=4):
     if max_workers is None:
         max_workers = max(1, cpu_count() - 1)
 
