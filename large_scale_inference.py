@@ -185,131 +185,50 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
     return combined
 
 
-def sliding_window_inference(
-    model, image, num_classes, patch_size=1024, keep_ratio=0.7
-):
-    inner_size = int(patch_size * keep_ratio)
-    outer_margin = (patch_size - inner_size) // 2
-    stride = inner_size  # No overlap
-
-    batch_size, _, H, W = image.shape
-
-    # Pad image to ensure full coverage
-    pad_h = (patch_size - H % patch_size) % patch_size
-    pad_w = (patch_size - W % patch_size) % patch_size
-    image = nn.functional.pad(image, (0, pad_w, 0, pad_h), mode="reflect")
-    _, _, padded_H, padded_W = image.shape
-
-    # Initialize prediction tensor
-    prediction = torch.zeros(
-        (batch_size, num_classes, padded_H, padded_W), device=image.device
-    )
-
-    print(f"   Starting sliding window inference...")
-    print(f"   Image shape: {image.shape}")
-    print(f"   Patch size: {patch_size}, keep ratio: {keep_ratio}")
-    print(
-        f"   Stride: {stride}, Inner size: {inner_size}, Outer margin: {outer_margin}"
-    )
-
-    # Sliding window inference
-    for h in range(0, padded_H - patch_size + 1, stride):
-        for w in range(0, padded_W - patch_size + 1, stride):
-            print(f"      Patch at (h={h}, w={w})")
-            window = image[:, :, h : h + patch_size, w : w + patch_size]
-            with torch.no_grad():
-                with torch.amp.autocast("cuda"):
-                    output = model(window)
-
-            print(
-                f"         Output shape from model: {output.shape}, max val: {output.max().item():.4f}"
-            )
-            # Update predictions with inner part of the output
-            prediction[
-                :,
-                :,
-                h + outer_margin : h + outer_margin + inner_size,
-                w + outer_margin : w + outer_margin + inner_size,
-            ] += output[
-                :,
-                :,
-                outer_margin : outer_margin + inner_size,
-                outer_margin : outer_margin + inner_size,
-            ]
-
-    # Crop back to original image size
-    prediction = prediction[:, :, :H, :W]
-
-    return prediction
-
-
 def sliding_window_inference_batched(
-    model, image, num_classes, patch_size=1024, keep_ratio=0.7
+    model, images, num_classes, patch_size=1024, keep_ratio=0.7
 ):
     inner_size = int(patch_size * keep_ratio)
     outer_margin = (patch_size - inner_size) // 2
     stride = inner_size
 
-    batch_size, _, H, W = image.shape
+    batch_size, _, H, W = images.shape
 
     pad_h = (patch_size - H % patch_size) % patch_size
     pad_w = (patch_size - W % patch_size) % patch_size
-    image = nn.functional.pad(image, (0, pad_w, 0, pad_h), mode="reflect")
-    _, _, padded_H, padded_W = image.shape
-
-    # Calculate number of patches needed
-    num_patches_h = (padded_H - patch_size) // stride + 1
-    num_patches_w = (padded_W - patch_size) // stride + 1
-
-    # Calculate batch size for patches
-    patch_batch_size = num_patches_h * num_patches_w
+    images = nn.functional.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
+    _, _, padded_H, padded_W = images.shape
 
     prediction = torch.zeros(
-        (batch_size, num_classes, padded_H, padded_W), device=image.device
+        (batch_size, num_classes, padded_H, padded_W), device=images.device
     )
 
-    patch_coords = []
-    patch_windows = []
+    for b in range(batch_size):
+        patch_coords = []
+        patch_windows = []
 
-    for h in range(0, padded_H - patch_size + 1, stride):
-        for w in range(0, padded_W - patch_size + 1, stride):
-            window = image[:, :, h : h + patch_size, w : w + patch_size]
-            patch_windows.append(window)
-            patch_coords.append((h, w))
+        # ⬇️ Automatische Berechnung der Patch-Batch-Größe
+        num_patches_h = (padded_H - patch_size) // stride + 1
+        num_patches_w = (padded_W - patch_size) // stride + 1
+        patch_batch_size = num_patches_h * num_patches_w
+        print(f"📦 Bild {b}: patch_batch_size = {patch_batch_size}")
 
-            if len(patch_windows) == patch_batch_size:
-                # Stack and run model
-                batch_patches = torch.cat(patch_windows, dim=0)  # [N, 3, 1024, 1024]
-                with torch.no_grad():
-                    with torch.amp.autocast("cuda"):
-                        batch_output = model(batch_patches)
+        for h in range(0, padded_H - patch_size + 1, stride):
+            for w in range(0, padded_W - patch_size + 1, stride):
+                window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
+                patch_windows.append(window)
+                patch_coords.append((h, w))
 
-                for i, (h_, w_) in enumerate(patch_coords):
-                    prediction[
-                        0,  # only supports batch_size = 1 for now
-                        :,
-                        h_ + outer_margin : h_ + outer_margin + inner_size,
-                        w_ + outer_margin : w_ + outer_margin + inner_size,
-                    ] = batch_output[
-                        i,
-                        :,
-                        outer_margin : outer_margin + inner_size,
-                        outer_margin : outer_margin + inner_size,
-                    ]
-
-                patch_windows = []
-                patch_coords = []
-
-    # process any remaining patches
-    if patch_windows:
+        # ⬇️ Alle Patches auf einmal durch das Modell
         batch_patches = torch.cat(patch_windows, dim=0)
         with torch.no_grad():
             with torch.amp.autocast("cuda"):
                 batch_output = model(batch_patches)
 
+        # ⬇️ Rückschreiben in das Ergebnisbild
         for i, (h_, w_) in enumerate(patch_coords):
             prediction[
-                0,
+                b,
                 :,
                 h_ + outer_margin : h_ + outer_margin + inner_size,
                 w_ + outer_margin : w_ + outer_margin + inner_size,
@@ -320,6 +239,7 @@ def sliding_window_inference_batched(
                 outer_margin : outer_margin + inner_size,
             ]
 
+    # Originalgröße zurückschneiden
     prediction = prediction[:, :, :H, :W]
     return prediction
 
