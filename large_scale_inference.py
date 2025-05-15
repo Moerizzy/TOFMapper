@@ -238,6 +238,60 @@ def sliding_window_inference_batched(
     return prediction
 
 
+import geopandas as gpd
+from shapely.ops import unary_union
+
+
+def merge_small_touching_polygons(shp_path, output_path, area_threshold=100):
+    # 1. Load the shapefile
+    gdf = gpd.read_file(shp_path)
+    gdf = gdf[gdf.is_valid]  # Filter out invalid geometries
+    gdf["area"] = gdf.geometry.area
+
+    # 2. Separate small and large polygons
+    small = gdf[gdf["area"] < area_threshold].copy()
+    large = gdf[gdf["area"] >= area_threshold].copy()
+
+    merged_polygons = []
+    merged_classes = []
+
+    for i, small_row in small.iterrows():
+        touching = large[large.geometry.touches(small_row.geometry)]
+
+        if not touching.empty:
+            # If there are touching polygons, merge with the largest one
+            touching = touching.copy()
+            touching["area"] = touching.geometry.area
+            largest = touching.sort_values("area", ascending=False).iloc[0]
+
+            # Merge the small polygon with the largest touching polygon
+            merged_geom = small_row.geometry.union(largest.geometry)
+            merged_polygons.append(merged_geom)
+            merged_classes.append(largest["class"])
+        else:
+            # If no touching polygons, keep the small polygon as is
+            merged_polygons.append(small_row.geometry)
+            merged_classes.append(small_row["class"])
+
+    # 3. Create a new GeoDataFrame for merged small polygons
+    gdf_merged_small = gpd.GeoDataFrame(
+        {"class": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
+    )
+
+    # 4. Merge the small polygons with the large ones
+    result = pd.concat(
+        [large[["class", "geometry"]], gdf_merged_small], ignore_index=True
+    )
+    result = result.dissolve(by=["class"])  # optional geometrisch vereinen pro Klasse
+    result = result.explode(index_parts=False).reset_index(
+        drop=True
+    )  # vereinzelte Polygone aufteilen
+
+    # 5. Save the result to a new shapefile
+    result.to_file(output_path)
+    print(f"✅ Fertig! Ergebnis gespeichert unter: {output_path}")
+
+
 def main():
     args = get_args()
     seed_everything(42)
@@ -327,6 +381,12 @@ def main():
             os.system(
                 f"gdal_polygonize.py -q {output_file} -f 'ESRI Shapefile' "
                 f"{output_file.replace('.tif', '.shp')}"
+            )
+            # Merge small touching polygons
+            merge_small_touching_polygons(
+                output_file.replace(".tif", ".shp"),
+                output_file.replace(".tif", "_merged.shp"),
+                area_threshold=100,
             )
 
         end_time = time.time()
