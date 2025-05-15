@@ -238,33 +238,23 @@ def sliding_window_inference_batched(
     return prediction
 
 
-import geopandas as gpd
-from shapely.ops import unary_union
-
-
-import geopandas as gpd
-import pandas as pd
-from shapely.ops import unary_union
-
-
-def merge_small_touching_polygons(
+def merge_touching_polygons_with_threshold(
     shp_path, output_path, area_threshold=100, min_area=1
 ):
-    # 1. Load shapefile and calculate areas
     gdf = gpd.read_file(shp_path)
     gdf = gdf[gdf.is_valid].copy()
+
+    # 1. Remove class 0
+    gdf = gdf[gdf["DN"] != 0].copy()
+
+    # 2. Compute area and spatial index
     gdf["area"] = gdf.geometry.area
-
-    # 2. Remove very small polygons (less than 1 m²)
-    gdf = gdf[gdf["area"] >= min_area].copy()
-
-    # 3. Create spatial index for fast neighborhood lookup
     gdf = gdf.reset_index(drop=True)
     sindex = gdf.sindex
 
     merged_polygons = []
     merged_classes = []
-    visited = set()  # Keep track of processed polygons
+    visited = set()
 
     for i, row in gdf.iterrows():
         if i in visited:
@@ -274,7 +264,7 @@ def merge_small_touching_polygons(
         class_dn = row["DN"]
         area = row["area"]
 
-        # 4. Check for touching neighbors using spatial index
+        # 3. Find touching neighbors
         possible_matches_index = list(sindex.intersection(geom.bounds))
         if i in possible_matches_index:
             possible_matches_index.remove(i)
@@ -285,34 +275,37 @@ def merge_small_touching_polygons(
                 continue
             other = gdf.loc[j]
             if geom.touches(other.geometry):
+                # Check merging rule
+                if area >= area_threshold and other.area >= area_threshold:
+                    continue  # skip large + large
                 touching.append((j, other))
 
         if touching:
-            # 5. Merge group of touching polygons
             group = [(i, row)] + touching
             total_geom = unary_union([g.geometry for _, g in group])
 
-            # Assign the class of the largest polygon in the group
+            # Class of the largest polygon
             largest = max(group, key=lambda g: g[1].area)
             merged_polygons.append(total_geom)
             merged_classes.append(largest[1]["DN"])
-
-            # Mark all merged polygons as visited
             visited.update([idx for idx, _ in group])
         else:
-            # No touching neighbors → keep original geometry
+            # No merge → keep original
             merged_polygons.append(geom)
             merged_classes.append(class_dn)
             visited.add(i)
 
-    # 6. Build final GeoDataFrame
+    # 4. Create output GeoDataFrame
     result = gpd.GeoDataFrame(
         {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
     )
 
-    # 7. Save to shapefile
+    # 5. Remove very small remaining polygons
+    result["area"] = result.geometry.area
+    result = result[result["area"] >= min_area].copy()
+
     result.to_file(output_path)
-    print(f"✅ Done! Merged result saved to: {output_path}")
+    print(f"✅ Done! Output saved to {output_path}")
 
 
 def main():
