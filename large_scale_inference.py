@@ -244,7 +244,7 @@ def sliding_window_inference(
 
 
 def sliding_window_inference_batched(
-    model, image, num_classes, patch_size=1024, keep_ratio=0.7, patch_batch_size=8
+    model, image, num_classes, patch_size=1024, keep_ratio=0.7
 ):
     inner_size = int(patch_size * keep_ratio)
     outer_margin = (patch_size - inner_size) // 2
@@ -256,6 +256,13 @@ def sliding_window_inference_batched(
     pad_w = (patch_size - W % patch_size) % patch_size
     image = nn.functional.pad(image, (0, pad_w, 0, pad_h), mode="reflect")
     _, _, padded_H, padded_W = image.shape
+
+    # Calculate number of patches needed
+    num_patches_h = (padded_H - patch_size) // stride + 1
+    num_patches_w = (padded_W - patch_size) // stride + 1
+
+    # Calculate batch size for patches
+    patch_batch_size = num_patches_h * num_patches_w
 
     prediction = torch.zeros(
         (batch_size, num_classes, padded_H, padded_W), device=image.device
@@ -336,7 +343,7 @@ def main():
         keep_ratio=args.keep_ratio,
         transform=albu.Normalize(),
     )
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
     os.makedirs(args.output_path, exist_ok=True)
 
@@ -359,7 +366,6 @@ def main():
             num_classes=config.num_classes,
             patch_size=args.patch_size,
             keep_ratio=args.keep_ratio,
-            patch_batch_size=args.batch_size,  # Adjust to fit GPU memory
         )
 
         end_time_prediction = time.time()
