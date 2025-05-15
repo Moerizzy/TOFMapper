@@ -242,52 +242,77 @@ import geopandas as gpd
 from shapely.ops import unary_union
 
 
-def merge_small_touching_polygons(shp_path, output_path, area_threshold=100):
-    # 1. Load the shapefile
+import geopandas as gpd
+import pandas as pd
+from shapely.ops import unary_union
+
+
+def merge_small_touching_polygons(
+    shp_path, output_path, area_threshold=100, min_area=1
+):
+    # 1. Load shapefile and calculate areas
     gdf = gpd.read_file(shp_path)
-    gdf = gdf[gdf.is_valid]  # Filter out invalid geometries
+    gdf = gdf[gdf.is_valid].copy()
     gdf["area"] = gdf.geometry.area
 
-    # 2. Separate small and large polygons
-    small = gdf[gdf["area"] < area_threshold].copy()
-    large = gdf[gdf["area"] >= area_threshold].copy()
+    # 2. Remove very small polygons (less than 1 m²)
+    gdf = gdf[gdf["area"] >= min_area].copy()
+
+    # 3. Create spatial index for fast neighborhood lookup
+    gdf = gdf.reset_index(drop=True)
+    sindex = gdf.sindex
 
     merged_polygons = []
     merged_classes = []
+    visited = set()  # Keep track of processed polygons
 
-    for i, small_row in small.iterrows():
-        touching = large[large.geometry.touches(small_row.geometry)]
+    for i, row in gdf.iterrows():
+        if i in visited:
+            continue
 
-        if not touching.empty:
-            # If there are touching polygons, merge with the largest one
-            touching = touching.copy()
-            touching["area"] = touching.geometry.area
-            largest = touching.sort_values("area", ascending=False).iloc[0]
+        geom = row.geometry
+        class_dn = row["DN"]
+        area = row["area"]
 
-            # Merge the small polygon with the largest touching polygon
-            merged_geom = small_row.geometry.union(largest.geometry)
-            merged_polygons.append(merged_geom)
-            merged_classes.append(largest["DN"])
+        # 4. Check for touching neighbors using spatial index
+        possible_matches_index = list(sindex.intersection(geom.bounds))
+        if i in possible_matches_index:
+            possible_matches_index.remove(i)
+
+        touching = []
+        for j in possible_matches_index:
+            if j in visited:
+                continue
+            other = gdf.loc[j]
+            if geom.touches(other.geometry):
+                touching.append((j, other))
+
+        if touching:
+            # 5. Merge group of touching polygons
+            group = [(i, row)] + touching
+            total_geom = unary_union([g.geometry for _, g in group])
+
+            # Assign the class of the largest polygon in the group
+            largest = max(group, key=lambda g: g[1].area)
+            merged_polygons.append(total_geom)
+            merged_classes.append(largest[1]["DN"])
+
+            # Mark all merged polygons as visited
+            visited.update([idx for idx, _ in group])
         else:
-            # If no touching polygons, keep the small polygon as is
-            merged_polygons.append(small_row.geometry)
-            merged_classes.append(small_row["DN"])
+            # No touching neighbors → keep original geometry
+            merged_polygons.append(geom)
+            merged_classes.append(class_dn)
+            visited.add(i)
 
-    # 3. Create a new GeoDataFrame for merged small polygons
-    gdf_merged_small = gpd.GeoDataFrame(
+    # 6. Build final GeoDataFrame
+    result = gpd.GeoDataFrame(
         {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
     )
 
-    # 4. Merge the small polygons with the large ones
-    result = pd.concat([large[["DN", "geometry"]], gdf_merged_small], ignore_index=True)
-    result = result.dissolve(by=["DN"])  # optional geometrisch vereinen pro Klasse
-    result = result.explode(index_parts=False).reset_index(
-        drop=True
-    )  # vereinzelte Polygone aufteilen
-
-    # 5. Save the result to a new shapefile
+    # 7. Save to shapefile
     result.to_file(output_path)
-    print(f"✅ Fertig! Ergebnis gespeichert unter: {output_path}")
+    print(f"✅ Done! Merged result saved to: {output_path}")
 
 
 def main():
@@ -385,6 +410,7 @@ def main():
                 output_file.replace(".tif", ".shp"),
                 output_file.replace(".tif", "_merged.shp"),
                 area_threshold=100,
+                min_area=1,
             )
 
         end_time = time.time()
