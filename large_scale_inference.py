@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import torch
 import albumentations as albu
+import time
 from tools.cfg import py2cfg
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
@@ -338,9 +339,8 @@ def main():
     os.makedirs(args.output_path, exist_ok=True)
 
     for batch in tqdm(dataloader, desc="Processing Images"):
-        # Logging batch size and image names
-        print(f"\n➡️  Processing batch with {len(batch['image'])} image(s)")
-        print(f"   Image names: {batch['image_name']}")
+
+        start_time = time.time()
 
         # Move images to GPU
         images = batch["image"].cuda()
@@ -355,13 +355,10 @@ def main():
             num_classes=config.num_classes,
             patch_size=args.patch_size,
             keep_ratio=args.keep_ratio,
-            patch_batch_size=8,  # Adjust to fit GPU memory
+            patch_batch_size=16,  # Adjust to fit GPU memory
         )
 
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
-
-        for i, name in enumerate(image_names):
-            print(f"🖼️  {name} → Klassen: {torch.unique(predictions[i]).tolist()}")
 
         for i in range(len(images)):
             prediction = predictions[i]
@@ -403,6 +400,10 @@ def main():
                 f"gdal_polygonize.py -q {output_file} -f 'ESRI Shapefile' "
                 f"{output_file.replace('.tif', '.shp')}"
             )
+
+        end_time = time.time()
+        elapsed = end_time - start_time
+        print(f"⏱️  Time taken for {image_names[0]}: {elapsed:.2f} seconds")
 
 
 if __name__ == "__main__":
