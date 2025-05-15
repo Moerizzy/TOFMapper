@@ -232,8 +232,6 @@ def sliding_window_inference_batched(
                 all_patches.append(window)
                 patch_targets.append((b, h, w))
 
-    print(f"📦 Total patches: {len(all_patches)}")
-
     batch_patches = torch.cat(all_patches, dim=0)  # shape: [N, 3, 1024, 1024]
 
     with torch.no_grad():
@@ -299,7 +297,10 @@ def polygonize_raster_to_geopackage(
     merged_classes = []
     for component in nx.connected_components(G):
         group = gdf.loc[list(component)]
-        merged_geom = unary_union(group.geometry)
+        if len(group) == 1:
+            merged_geom = group.geometry.values[0]
+        else:
+            merged_geom = unary_union(group.geometry)
         largest = group.sort_values("area", ascending=False).iloc[0]
         merged_polygons.append(merged_geom)
         merged_classes.append(largest["DN"])
@@ -322,8 +323,11 @@ def polygonize_raster_to_geopackage(
             )
         return geom
 
-    result["geometry"] = result["geometry"].apply(
-        lambda g: fill_small_holes(g, hole_area_threshold)
+    has_holes = result.geometry.apply(
+        lambda g: hasattr(g, "interiors") and len(g.interiors) > 0
+    )
+    result.loc[has_holes, "geometry"] = result.loc[has_holes, "geometry"].apply(
+        lambda g: fill_small_holes(g, hole_area_threshold=100)
     )
 
     # 6. Remove very small final polygons
@@ -422,7 +426,7 @@ def polygonize_raster_to_geopackage(
 
 
 def process_image(image_path):
-    output_gpkg = image_path.replace(".tif", "_cleaned.gpkg")
+    output_gpkg = image_path.replace(".tif", ".gpkg")
     polygonize_raster_to_geopackage(
         tif_path=image_path,
         output_gpkg=output_gpkg,
