@@ -410,24 +410,27 @@ def main():
                 with rasterio.open(output_file, "w", **profile) as dst:
                     dst.write(prediction_np.astype(rasterio.uint8), 1)
 
-            # Convert to shapefile
+            # Convert to GPKG
+            gpkg_path = output_file.replace(".tif", ".gpkg")
             os.system(
-                f"gdal_polygonize.py -q {output_file} -f 'ESRI Shapefile' "
-                f"{output_file.replace('.tif', '.shp')}"
+                f"gdal_polygonize.py -q {output_file} -f 'GPKG' {gpkg_path} -nln polygons"
             )
             # Merge small touching polygons
-            gdf = gpd.read_file(output_file.replace(".tif", ".shp"))
+            gdf = gpd.read_file(gpkg_path)
             result = merge_touching_polygons_connected_components(
                 gdf, area_threshold=100, min_area=1
             )
             # Fill small holes
-            result["geometry"] = result["geometry"].apply(
+            import swifter  # optional, for speed
+
+            result["geometry"] = result["geometry"].swifter.apply(
                 lambda g: fill_small_holes(g, hole_area_threshold=100)
             )
 
-            result.to_file(
-                output_file.replace(".tif", "_merged.shp"), driver="ESRI Shapefile"
-            )
+            # Save only final result
+            final_path = output_file.replace(".tif", "_cleaned.gpkg")
+            result.to_file(final_path, driver="GPKG")
+            print(f"Saved cleaned result: {final_path}")
 
         end_time = time.time()
         elapsed = end_time - start_time
