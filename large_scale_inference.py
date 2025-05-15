@@ -399,7 +399,7 @@ def main():
                 f"{output_file.replace('.tif', '.shp')}"
             )
             # Merge small touching polygons
-            merge_small_touching_polygons(
+            merge_touching_polygons_with_threshold(
                 output_file.replace(".tif", ".shp"),
                 output_file.replace(".tif", "_merged.shp"),
                 area_threshold=100,
