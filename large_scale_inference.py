@@ -1,23 +1,36 @@
+import os
+import time
+import glob
 import argparse
 from pathlib import Path
-import glob
-import cv2
+
+# Scientific and numerical libraries
 import numpy as np
+import pandas as pd
+
+# PyTorch and related
 import torch
-import albumentations as albu
-import time
-from tools.cfg import py2cfg
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import autocast
-from tqdm import tqdm
-from train_supervision import *
-import os
+
+# Image and augmentation
+import cv2
+import albumentations as albu
+
+# Geospatial
 import rasterio
 from rasterio.merge import merge
 import geopandas as gpd
-import pandas as pd
+from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
+
+# Progress bar
+from tqdm import tqdm
+
+# Custom modules
+from tools.cfg import py2cfg
+from train_supervision import *
 
 
 def seed_everything(seed):
@@ -296,6 +309,22 @@ def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_ar
     return result
 
 
+def fill_small_holes(geom, hole_area_threshold=100):
+    if isinstance(geom, Polygon):
+        outer = geom.exterior
+        new_interiors = [
+            r for r in geom.interiors if Polygon(r).area > hole_area_threshold
+        ]
+        return Polygon(outer, new_interiors)
+
+    elif isinstance(geom, MultiPolygon):
+        return MultiPolygon(
+            [fill_small_holes(p, hole_area_threshold) for p in geom.geoms]
+        )
+
+    return geom  # fallback (in case of unexpected geometry type)
+
+
 def main():
     args = get_args()
     seed_everything(42)
@@ -391,6 +420,11 @@ def main():
             result = merge_touching_polygons_connected_components(
                 gdf, area_threshold=100, min_area=1
             )
+            # Fill small holes
+            result["geometry"] = result["geometry"].apply(
+                lambda g: fill_small_holes(g, hole_area_threshold=100)
+            )
+
             result.to_file(
                 output_file.replace(".tif", "_merged.shp"), driver="ESRI Shapefile"
             )
