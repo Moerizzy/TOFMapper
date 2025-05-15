@@ -321,6 +321,77 @@ def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_ar
     return result
 
 
+def merge_touching_polygons_spatial(gdf, area_threshold=100, min_area=1):
+    print("⏱️ merging with spatial join...")
+    t_start = time.time()
+
+    # 1. Entferne ungültige Geometrien, Hintergrund & berechne Fläche
+    gdf = gdf[gdf.is_valid].copy()
+    gdf = gdf[gdf["DN"] != 0].copy()
+    gdf["area"] = gdf.geometry.area
+    gdf = gdf.reset_index(drop=True)
+
+    # 2. Finde alle berührenden Nachbarn per spatial join
+    joined = gpd.sjoin(gdf, gdf, predicate="touches", how="left")
+    joined = joined[joined.index != joined.index_right]
+
+    # 3. Gruppiere nur solche, wo mindestens eines < threshold ist
+    groups = {}
+    for idx, row in joined.iterrows():
+        i, j = idx, row["index_right"]
+        area_i = gdf.loc[i, "area"]
+        area_j = gdf.loc[j, "area"]
+        if area_i < area_threshold or area_j < area_threshold:
+            groups.setdefault(i, set()).add(i)
+            groups[i].add(j)
+            groups.setdefault(j, set()).add(j)
+            groups[j].add(i)
+
+    # 4. Bilde Komponenten (wie connected components)
+    visited = set()
+    components = []
+
+    for node in groups:
+        if node not in visited:
+            stack = [node]
+            comp = set()
+            while stack:
+                n = stack.pop()
+                if n not in visited:
+                    visited.add(n)
+                    comp.add(n)
+                    stack.extend(groups.get(n, []))
+            components.append(comp)
+
+    # 5. Merge Komponentengeometrien (und DN übernehmen vom größten)
+    merged_geoms = []
+    merged_classes = []
+
+    for comp in components:
+        group = gdf.loc[list(comp)]
+        if len(group) == 1:
+            merged_geoms.append(group.geometry.values[0])
+            merged_classes.append(group["DN"].values[0])
+        else:
+            merged_geoms.append(unary_union(group.geometry))
+            largest = group.sort_values("area", ascending=False).iloc[0]
+            merged_classes.append(largest["DN"])
+
+    # 6. Füge gemergte + unberührte zusammen
+    merged = gpd.GeoDataFrame(
+        {"DN": merged_classes, "geometry": merged_geoms}, crs=gdf.crs
+    )
+    untouched = gdf.drop(index=set().union(*components), errors="ignore")
+    result = pd.concat([merged, untouched], ignore_index=True)
+
+    # 7. Entferne kleine Restflächen
+    result["area"] = result.geometry.area
+    result = result[result["area"] >= min_area].copy()
+
+    print(f"✅ merge done in {time.time() - t_start:.2f}s")
+    return result
+
+
 def polygonize_raster_to_geopackage(
     tif_path, output_gpkg, area_threshold=100, min_area=1, hole_area_threshold=100
 ):
@@ -346,7 +417,7 @@ def polygonize_raster_to_geopackage(
     gdf = gdf.reset_index(drop=True)
     print(f"⏱️ filtering & area calc: {time.time() - t2:.2f}s")
 
-    result = merge_touching_polygons_connected_components(gdf, area_threshold, min_area)
+    result = merge_touching_polygons_spatial(gdf, area_threshold, min_area)
 
     t3 = time.time()
     has_holes = result.geometry.apply(
