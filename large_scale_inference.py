@@ -14,16 +14,20 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import autocast
 
-# Image and augmentation
+# Image processing and augmentation
 import cv2
 import albumentations as albu
 
 # Geospatial
 import rasterio
 from rasterio.merge import merge
+from rasterio.features import shapes
 import geopandas as gpd
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
+
+# Graphs
+import networkx as nx
 
 # Progress bar
 from tqdm import tqdm
@@ -249,12 +253,6 @@ def sliding_window_inference_batched(
 
     prediction = prediction[:, :, :H, :W]
     return prediction
-
-
-import geopandas as gpd
-import pandas as pd
-import networkx as nx
-from shapely.ops import unary_union
 
 
 def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_area=1):
