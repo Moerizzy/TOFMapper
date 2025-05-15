@@ -203,43 +203,37 @@ def sliding_window_inference_batched(
         (batch_size, num_classes, padded_H, padded_W), device=images.device
     )
 
+    all_patches = []
+    patch_targets = []  # (image_index, h, w)
+
     for b in range(batch_size):
-        patch_coords = []
-        patch_windows = []
-
-        # ⬇️ Automatische Berechnung der Patch-Batch-Größe
-        num_patches_h = (padded_H - patch_size) // stride + 1
-        num_patches_w = (padded_W - patch_size) // stride + 1
-        patch_batch_size = num_patches_h * num_patches_w
-        print(f"📦 Bild {b}: patch_batch_size = {patch_batch_size}")
-
         for h in range(0, padded_H - patch_size + 1, stride):
             for w in range(0, padded_W - patch_size + 1, stride):
                 window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
-                patch_windows.append(window)
-                patch_coords.append((h, w))
+                all_patches.append(window)
+                patch_targets.append((b, h, w))
 
-        # ⬇️ Alle Patches auf einmal durch das Modell
-        batch_patches = torch.cat(patch_windows, dim=0)
-        with torch.no_grad():
-            with torch.amp.autocast("cuda"):
-                batch_output = model(batch_patches)
+    print(f"📦 Total patches: {len(all_patches)}")
 
-        # ⬇️ Rückschreiben in das Ergebnisbild
-        for i, (h_, w_) in enumerate(patch_coords):
-            prediction[
-                b,
-                :,
-                h_ + outer_margin : h_ + outer_margin + inner_size,
-                w_ + outer_margin : w_ + outer_margin + inner_size,
-            ] = batch_output[
-                i,
-                :,
-                outer_margin : outer_margin + inner_size,
-                outer_margin : outer_margin + inner_size,
-            ]
+    batch_patches = torch.cat(all_patches, dim=0)  # shape: [N, 3, 1024, 1024]
 
-    # Originalgröße zurückschneiden
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            batch_output = model(batch_patches)  # shape: [N, num_classes, 1024, 1024]
+
+    for i, (b, h, w) in enumerate(patch_targets):
+        prediction[
+            b,
+            :,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = batch_output[
+            i,
+            :,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+
     prediction = prediction[:, :, :H, :W]
     return prediction
 
