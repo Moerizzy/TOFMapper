@@ -15,6 +15,8 @@ from train_supervision import *
 import os
 import rasterio
 from rasterio.merge import merge
+import geopandas as gpd
+from shapely.ops import unary_union
 
 
 def seed_everything(seed):
