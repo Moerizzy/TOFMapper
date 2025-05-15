@@ -635,6 +635,126 @@ def run_parallel_polygonization(image_paths, max_workers=4):
     return results
 
 
+def sliding_window_inference_batched_uncertainty(
+    model, images, num_classes, patch_size=1024, keep_ratio=0.7, mc_iterations=10
+):
+    """
+    Perform batched sliding window inference and estimate uncertainty using:
+      - Entropy from a single softmax output (basic uncertainty)
+      - Entropy and standard deviation from Monte Carlo Dropout (MC) inference
+
+    Returns:
+        mean_logits: Tensor of shape (B, num_classes, H, W) — MC averaged logits
+        entropy_map_basic: Tensor of shape (B, H, W) — entropy from a single forward pass
+        entropy_map_mc: Tensor of shape (B, H, W) — entropy from MC-averaged softmax
+        std_map: Tensor of shape (B, H, W) — std across MC iterations
+    """
+    inner_size = int(patch_size * keep_ratio)
+    outer_margin = (patch_size - inner_size) // 2
+    stride = inner_size
+
+    batch_size, _, H, W = images.shape
+    pad_h = (patch_size - H % patch_size) % patch_size
+    pad_w = (patch_size - W % patch_size) % patch_size
+    images = F.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
+    _, _, padded_H, padded_W = images.shape
+
+    all_patches = []
+    patch_targets = []
+    for b in range(batch_size):
+        for h in range(0, padded_H - patch_size + 1, stride):
+            for w in range(0, padded_W - patch_size + 1, stride):
+                window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
+                all_patches.append(window)
+                patch_targets.append((b, h, w))
+
+    patch_tensor = torch.cat(all_patches, dim=0)
+    N = patch_tensor.shape[0]
+
+    # Single forward pass (basic uncertainty)
+    model.eval()
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            single_logits = model(patch_tensor)
+
+    single_softmax = F.softmax(single_logits, dim=1)
+    entropy_basic = -(single_softmax * torch.log(single_softmax + 1e-8)).sum(
+        dim=1
+    )  # [N, H, W]
+
+    # Monte Carlo dropout
+    mc_logits = torch.zeros(
+        (mc_iterations, N, num_classes, patch_size, patch_size), device=images.device
+    )
+    model.train()
+    with torch.no_grad():
+        for i in range(mc_iterations):
+            with torch.amp.autocast("cuda"):
+                mc_logits[i] = model(patch_tensor)
+
+    model.eval()
+    mean_logits = mc_logits.mean(dim=0)
+    softmax_mc = F.softmax(mean_logits, dim=1)
+    entropy_mc = -(softmax_mc * torch.log(softmax_mc + 1e-8)).sum(dim=1)
+    std_map = mc_logits.std(dim=0).mean(dim=1)
+
+    pred_map = torch.zeros(
+        (batch_size, num_classes, padded_H, padded_W), device=images.device
+    )
+    entropy_map_basic = torch.zeros(
+        (batch_size, padded_H, padded_W), device=images.device
+    )
+    entropy_map_mc = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
+    std_map_full = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
+
+    for i, (b, h, w) in enumerate(patch_targets):
+        pred_map[
+            b,
+            :,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = mean_logits[
+            i,
+            :,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+        entropy_map_basic[
+            b,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = entropy_basic[
+            i,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+        entropy_map_mc[
+            b,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = entropy_mc[
+            i,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+        std_map_full[
+            b,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = std_map[
+            i,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+
+    return (
+        pred_map[:, :, :H, :W],
+        entropy_map_basic[:, :H, :W],
+        entropy_map_mc[:, :H, :W],
+        std_map_full[:, :H, :W],
+    )
+
+
 def main():
     """
     Main execution function for large-scale raster segmentation inference.
@@ -677,46 +797,78 @@ def main():
         image_names = batch["image_name"]
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
-        # Run inference using batched sliding windows
-        predictions = sliding_window_inference_batched(
-            model,
-            images,
-            num_classes=config.num_classes,
-            patch_size=args.patch_size,
-            keep_ratio=args.keep_ratio,
+        # Run MC Dropout inference with entropy and std
+        mean_logits, entropy_map, std_map = (
+            sliding_window_inference_batched_uncertainty(
+                model,
+                images,
+                num_classes=config.num_classes,
+                patch_size=args.patch_size,
+                keep_ratio=args.keep_ratio,
+                mc_iterations=10,
+            )
         )
-        predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
+
+        predictions = nn.Softmax(dim=1)(mean_logits).argmax(dim=1)
 
         written_tif_paths = []
 
-        # Write predicted masks to GeoTIFF files with original georeferencing
         for i in range(len(images)):
-            prediction = predictions[i].cpu().numpy().astype(np.uint8)
+            prediction = predictions[i].argmax(dim=0).cpu().numpy().astype(np.uint8)
+            entropy_basic = entropy_map_basic[i].cpu().numpy().astype(np.float32)
+            entropy_mc = entropy_map_mc[i].cpu().numpy().astype(np.float32)
+            std = std_map[i].cpu().numpy().astype(np.float32)
+
             input_path = input_paths[i]
-            output_file = os.path.join(args.output_path, image_names[i])
-            written_tif_paths.append(output_file)
+            base_name = os.path.splitext(image_names[i])[0]
+            output_pred_file = os.path.join(args.output_path, f"{base_name}.tif")
+            output_entropy_basic_file = os.path.join(
+                args.output_path, f"{base_name}_entropy_basic.tif"
+            )
+            output_entropy_mc_file = os.path.join(
+                args.output_path, f"{base_name}_entropy_mc.tif"
+            )
+            output_std_file = os.path.join(args.output_path, f"{base_name}_std.tif")
+
+            written_tif_paths.append(output_pred_file)
 
             with rasterio.open(input_path) as src:
                 height, width = src.height, src.width
 
-                # Center crop prediction to match original image size
-                if prediction.shape != (height, width):
-                    center_h = (prediction.shape[0] - height) // 2
-                    center_w = (prediction.shape[1] - width) // 2
-                    prediction = prediction[
-                        center_h : center_h + height, center_w : center_w + width
-                    ]
+                def center_crop(arr):
+                    if arr.shape != (height, width):
+                        center_h = (arr.shape[0] - height) // 2
+                        center_w = (arr.shape[1] - width) // 2
+                        return arr[
+                            center_h : center_h + height, center_w : center_w + width
+                        ]
+                    return arr
+
+                prediction = center_crop(prediction)
+                entropy_basic = center_crop(entropy_basic)
+                entropy_mc = center_crop(entropy_mc)
+                std = center_crop(std)
 
                 profile = src.profile
                 profile.update(
                     dtype=rasterio.uint8, count=1, compress="lzw", photometric=None
                 )
 
-                with rasterio.open(output_file, "w", **profile) as dst:
+                with rasterio.open(output_pred_file, "w", **profile) as dst:
                     dst.write(prediction, 1)
 
-        # Postprocess and polygonize results in parallel
-        run_parallel_polygonization(written_tif_paths)
+                profile.update(dtype=rasterio.float32)
+                with rasterio.open(output_entropy_basic_file, "w", **profile) as dst:
+                    dst.write(entropy_basic, 1)
+
+                with rasterio.open(output_entropy_mc_file, "w", **profile) as dst:
+                    dst.write(entropy_mc, 1)
+
+                with rasterio.open(output_std_file, "w", **profile) as dst:
+                    dst.write(std, 1)
+
+            # Postprocess and polygonize results in parallel
+            run_parallel_polygonization(written_tif_paths)
 
 
 if __name__ == "__main__":
