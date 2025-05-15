@@ -797,8 +797,8 @@ def main():
         image_names = batch["image_name"]
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
-        # Run MC Dropout inference with entropy and std
-        mean_logits, entropy_map, std_map = (
+        # Run MC Dropout inference with basic softmax entropy, MC entropy, and MC std
+        mean_logits, entropy_map_basic, entropy_map_mc, std_map = (
             sliding_window_inference_batched_uncertainty(
                 model,
                 images,
@@ -814,7 +814,7 @@ def main():
         written_tif_paths = []
 
         for i in range(len(images)):
-            prediction = predictions[i].argmax(dim=0).cpu().numpy().astype(np.uint8)
+            prediction = predictions[i].cpu().numpy().astype(np.uint8)
             entropy_basic = entropy_map_basic[i].cpu().numpy().astype(np.float32)
             entropy_mc = entropy_map_mc[i].cpu().numpy().astype(np.float32)
             std = std_map[i].cpu().numpy().astype(np.float32)
