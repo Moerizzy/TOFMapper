@@ -351,6 +351,8 @@ def main():
         # Store original metadata
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
+        start_time_prediction = time.time()
+
         predictions = sliding_window_inference_batched(
             model,
             images,
@@ -359,6 +361,10 @@ def main():
             keep_ratio=args.keep_ratio,
             patch_batch_size=args.batch_size,  # Adjust to fit GPU memory
         )
+
+        end_time_prediction = time.time()
+        elapsed_prediction = end_time_prediction - start_time_prediction
+        print(f"⏱️  Time taken for prediction: {elapsed_prediction:.2f} seconds")
 
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
 
