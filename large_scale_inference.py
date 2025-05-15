@@ -240,6 +240,80 @@ def sliding_window_inference(
     return prediction
 
 
+def sliding_window_inference_batched(
+    model, image, num_classes, patch_size=1024, keep_ratio=0.7, patch_batch_size=8
+):
+    inner_size = int(patch_size * keep_ratio)
+    outer_margin = (patch_size - inner_size) // 2
+    stride = inner_size
+
+    batch_size, _, H, W = image.shape
+
+    pad_h = (patch_size - H % patch_size) % patch_size
+    pad_w = (patch_size - W % patch_size) % patch_size
+    image = nn.functional.pad(image, (0, pad_w, 0, pad_h), mode="reflect")
+    _, _, padded_H, padded_W = image.shape
+
+    prediction = torch.zeros(
+        (batch_size, num_classes, padded_H, padded_W), device=image.device
+    )
+
+    patch_coords = []
+    patch_windows = []
+
+    for h in range(0, padded_H - patch_size + 1, stride):
+        for w in range(0, padded_W - patch_size + 1, stride):
+            window = image[:, :, h : h + patch_size, w : w + patch_size]
+            patch_windows.append(window)
+            patch_coords.append((h, w))
+
+            if len(patch_windows) == patch_batch_size:
+                # Stack and run model
+                batch_patches = torch.cat(patch_windows, dim=0)  # [N, 3, 1024, 1024]
+                with torch.no_grad():
+                    with torch.amp.autocast("cuda"):
+                        batch_output = model(batch_patches)
+
+                for i, (h_, w_) in enumerate(patch_coords):
+                    prediction[
+                        0,  # only supports batch_size = 1 for now
+                        :,
+                        h_ + outer_margin : h_ + outer_margin + inner_size,
+                        w_ + outer_margin : w_ + outer_margin + inner_size,
+                    ] = batch_output[
+                        i,
+                        :,
+                        outer_margin : outer_margin + inner_size,
+                        outer_margin : outer_margin + inner_size,
+                    ]
+
+                patch_windows = []
+                patch_coords = []
+
+    # process any remaining patches
+    if patch_windows:
+        batch_patches = torch.cat(patch_windows, dim=0)
+        with torch.no_grad():
+            with torch.amp.autocast("cuda"):
+                batch_output = model(batch_patches)
+
+        for i, (h_, w_) in enumerate(patch_coords):
+            prediction[
+                0,
+                :,
+                h_ + outer_margin : h_ + outer_margin + inner_size,
+                w_ + outer_margin : w_ + outer_margin + inner_size,
+            ] = batch_output[
+                i,
+                :,
+                outer_margin : outer_margin + inner_size,
+                outer_margin : outer_margin + inner_size,
+            ]
+
+    prediction = prediction[:, :, :H, :W]
+    return prediction
+
+
 def main():
     args = get_args()
     seed_everything(42)
@@ -275,13 +349,15 @@ def main():
         # Store original metadata
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
-        predictions = sliding_window_inference(
+        predictions = sliding_window_inference_batched(
             model,
             images,
             num_classes=config.num_classes,
             patch_size=args.patch_size,
             keep_ratio=args.keep_ratio,
+            patch_batch_size=8,  # Adjust to fit GPU memory
         )
+
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
 
         for i, name in enumerate(image_names):
