@@ -16,6 +16,7 @@ import os
 import rasterio
 from rasterio.merge import merge
 import geopandas as gpd
+import pandas as pd
 from shapely.ops import unary_union
 
 
@@ -132,9 +133,6 @@ def find_neighbors(image_path, radius=500):
                     and neighbor_bounds.top >= bounds.bottom - radius
                 ):
                     neighbors.append(file)
-    print(
-        f"   Found {len(neighbors)} neighbors for {image_path} and merged their corners."
-    )
     return neighbors
 
 
