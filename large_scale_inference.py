@@ -255,90 +255,7 @@ def sliding_window_inference_batched(
     return prediction
 
 
-# def polygonize_raster_to_geopackage(
-#     tif_path, output_gpkg, area_threshold=100, min_area=1, hole_area_threshold=100
-# ):
-#     # 1. Read raster and extract polygons
-#     with rasterio.open(tif_path) as src:
-#         image = src.read(1)
-#         mask = image != 0  # Exclude background (0)
-#         results = (
-#             {"properties": {"DN": int(v)}, "geometry": s}
-#             for s, v in shapes(image, mask=mask, transform=src.transform)
-#         )
-#         geoms = list(results)
-#         gdf = gpd.GeoDataFrame.from_features(geoms, crs=src.crs)
-
-#     # 2. Clean geometries and remove DN == 0
-#     gdf = gdf[gdf.is_valid].copy()
-#     gdf = gdf[gdf["DN"] != 0].copy()
-#     gdf["area"] = gdf.geometry.area
-#     gdf = gdf.reset_index(drop=True)
-
-#     # 3. Build spatial graph for merging connected components
-#     sindex = gdf.sindex
-#     G = nx.Graph()
-#     for i, row in gdf.iterrows():
-#         G.add_node(i)
-#         geom_i = row.geometry
-#         area_i = row.area
-#         matches = list(sindex.intersection(geom_i.bounds))
-#         if i in matches:
-#             matches.remove(i)
-#         for j in matches:
-#             geom_j = gdf.geometry[j]
-#             area_j = gdf.area[j]
-#             if geom_i.buffer(0.5).intersects(geom_j):
-#                 if not (area_i >= area_threshold and area_j >= area_threshold):
-#                     G.add_edge(i, j)
-
-#     # 4. Merge connected components
-#     merged_polygons = []
-#     merged_classes = []
-#     for component in nx.connected_components(G):
-#         group = gdf.loc[list(component)]
-#         if len(group) == 1:
-#             merged_geom = group.geometry.values[0]
-#         else:
-#             merged_geom = unary_union(group.geometry)
-#         largest = group.sort_values("area", ascending=False).iloc[0]
-#         merged_polygons.append(merged_geom)
-#         merged_classes.append(largest["DN"])
-
-#     result = gpd.GeoDataFrame(
-#         {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
-#     )
-
-#     # 5. Fill small holes
-#     def fill_small_holes(geom, hole_area_threshold):
-#         if isinstance(geom, Polygon):
-#             outer = geom.exterior
-#             new_interiors = [
-#                 r for r in geom.interiors if Polygon(r).area > hole_area_threshold
-#             ]
-#             return Polygon(outer, new_interiors)
-#         elif isinstance(geom, MultiPolygon):
-#             return MultiPolygon(
-#                 [fill_small_holes(p, hole_area_threshold) for p in geom.geoms]
-#             )
-#         return geom
-
-#     has_holes = result.geometry.apply(
-#         lambda g: hasattr(g, "interiors") and len(g.interiors) > 0
-#     )
-#     result.loc[has_holes, "geometry"] = result.loc[has_holes, "geometry"].apply(
-#         lambda g: fill_small_holes(g, hole_area_threshold=100)
-#     )
-
-#     # 6. Remove very small final polygons
-#     result["area"] = result.geometry.area
-#     result = result[result["area"] >= min_area].copy()
-
-#     # 7. Save to GeoPackage
-#     result.to_file(output_gpkg, driver="GPKG")
-#     print(f"✅ Saved: {output_gpkg}")
-
-#     # Re-import everything due to kernel reset
+import time
 
 
 def fill_small_holes(geom, hole_area_threshold=100):
@@ -356,6 +273,9 @@ def fill_small_holes(geom, hole_area_threshold=100):
 
 
 def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_area=1):
+    print("⏱️ merging connected components...")
+    t_start = time.time()
+
     gdf = gdf[gdf.is_valid].copy()
     gdf = gdf[gdf["DN"] != 0].copy()
     gdf["area"] = gdf.geometry.area
@@ -397,12 +317,17 @@ def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_ar
     result["area"] = result.geometry.area
     result = result[result["area"] >= min_area].copy()
 
+    print(f"✅ merging done in {time.time() - t_start:.2f}s")
     return result
 
 
 def polygonize_raster_to_geopackage(
     tif_path, output_gpkg, area_threshold=100, min_area=1, hole_area_threshold=100
 ):
+    print(f"📦 Processing {Path(tif_path).name}")
+    t_total = time.time()
+
+    t1 = time.time()
     with rasterio.open(tif_path) as src:
         image = src.read(1)
         mask = image != 0
@@ -412,23 +337,33 @@ def polygonize_raster_to_geopackage(
         )
         geoms = list(results)
         gdf = gpd.GeoDataFrame.from_features(geoms, crs=src.crs)
+    print(f"⏱️ polygonize (shapes): {time.time() - t1:.2f}s")
 
+    t2 = time.time()
     gdf = gdf[gdf.is_valid].copy()
     gdf = gdf[gdf["DN"] != 0].copy()
     gdf["area"] = gdf.geometry.area
     gdf = gdf.reset_index(drop=True)
+    print(f"⏱️ filtering & area calc: {time.time() - t2:.2f}s")
 
     result = merge_touching_polygons_connected_components(gdf, area_threshold, min_area)
+
+    t3 = time.time()
     has_holes = result.geometry.apply(
         lambda g: isinstance(g, Polygon) and len(g.interiors) > 0
     )
     result.loc[has_holes, "geometry"] = result.loc[has_holes, "geometry"].apply(
         lambda g: fill_small_holes(g, hole_area_threshold)
     )
+    print(f"⏱️ fill small holes: {time.time() - t3:.2f}s")
+
+    t4 = time.time()
     result["area"] = result.geometry.area
     result = result[result["area"] >= min_area].copy()
     result.to_file(output_gpkg, driver="GPKG")
-    print(f"✅ Saved: {output_gpkg}")
+    print(f"⏱️ save to GPKG: {time.time() - t4:.2f}s")
+
+    print(f"✅ Total time: {time.time() - t_total:.2f}s")
 
 
 def process_image(image_path):
