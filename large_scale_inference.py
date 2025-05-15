@@ -28,9 +28,6 @@ from rasterio.merge import merge
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
-# Graphs
-import networkx as nx
-
 # Progress bar
 from tqdm import tqdm
 
@@ -40,54 +37,134 @@ from train_supervision import *
 
 
 def seed_everything(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    """
+    Sets random seeds across commonly used libraries and environment settings
+    to ensure reproducibility of results.
+
+    This function is essential for consistent behavior during development,
+    evaluation, and debugging in deep learning pipelines.
+
+    Args:
+        seed (int): The seed value to use for all random generators.
+    """
+    # Python + NumPy
     np.random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
+
+    # PyTorch
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    # Ensure deterministic behavior (important for reproducibility)
     torch.backends.cudnn.deterministic = True
+
+    # Note: benchmark=True can improve performance for fixed input sizes,
+    # but may introduce minor nondeterminism on some setups
     torch.backends.cudnn.benchmark = True
 
 
 def get_args():
+    """
+    Parses command-line arguments for the TOFSeg inference script.
+
+    This function defines expected CLI inputs such as input/output directories,
+    model configuration, patch size, batch size, and keep ratio. It is used to
+    flexibly configure inference behavior without hardcoding parameters.
+
+    Returns:
+        argparse.Namespace: Parsed arguments object with all input values.
+    """
     parser = argparse.ArgumentParser(description="TOFSeg Inference Script")
+
+    # Path to input images (directory containing .tif/.png/.jpg files)
     parser.add_argument(
         "-i",
         "--image_path",
         required=True,
         help="Path to the folder containing input images.",
     )
+
+    # Path where output masks will be saved (GeoTIFF or vector files)
     parser.add_argument(
         "-o", "--output_path", required=True, help="Path to save the output masks."
     )
+
+    # Path to model/config YAML or Python config file
     parser.add_argument(
         "-c", "--config_path", required=True, help="Path to the configuration file."
     )
+
+    # Size of patches to extract during sliding-window inference
     parser.add_argument(
-        "-ps", "--patch_size", type=int, default=1024, help="Patch size for inference."
+        "-ps",
+        "--patch_size",
+        type=int,
+        default=1024,
+        help="Patch size (in pixels) for sliding window inference. Default: 1024",
     )
+
+    # Number of input images to process in one forward pass (outer batch size)
     parser.add_argument(
-        "-b", "--batch_size", type=int, default=2, help="Batch size for inference."
+        "-b",
+        "--batch_size",
+        type=int,
+        default=2,
+        help="Number of full images to process per batch. Default: 2",
     )
+
+    # Portion of each patch to retain (center area); the rest is margin
     parser.add_argument(
         "-kr",
         "--keep_ratio",
         type=float,
         default=0.7,
-        help="Ratio of patch to keep in sliding window inference.",
+        help="Fraction of the patch to retain (e.g. 0.7 keeps center 70%%). Default: 0.7",
     )
+
     return parser.parse_args()
 
 
 def calculate_margin(patch_size, keep_ratio):
+    """
+    Calculates the margin size to add around the central patch for context.
+
+    In patch-based inference, only the central part of the patch (defined by `keep_ratio`)
+    is used for prediction to avoid edge artifacts. This function computes the size of the
+    outer margin to be added equally on all sides.
+
+    Args:
+        patch_size (int): The size of the full square patch (e.g., 1024).
+        keep_ratio (float): The ratio of the patch (0 < keep_ratio ≤ 1) to retain for prediction.
+
+    Returns:
+        int: The margin (in pixels) to add to each side of the patch.
+    """
     return int((1 - keep_ratio) * patch_size / 2)
 
 
 class InferenceDataset(Dataset):
+    """
+    Custom PyTorch dataset for inference on geospatial image tiles with contextual neighborhood merging.
+
+    This dataset loads one image tile at a time and optionally merges neighboring tiles
+    into the margins to preserve spatial context at patch boundaries. It prepares the image
+    for inference by applying a transformation (e.g., normalization), padding margins,
+    and converting to a PyTorch tensor.
+
+    Args:
+        image_dir (str): Path to the directory containing input image tiles (GeoTIFF, PNG, JPG).
+        patch_size (int): Patch size used for inference (used to calculate margin).
+        keep_ratio (float): Fraction of the patch used for the inner prediction (used for margin calculation).
+        transform (albumentations.BasicTransform, optional): Transformations to apply to the input image (e.g., normalization).
+    """
+
     def __init__(self, image_dir, patch_size, keep_ratio, transform=None):
         self.image_dir = image_dir
         self.patch_size = patch_size
         self.keep_ratio = keep_ratio
         self.transform = transform
+
+        # Load and sort image file names with supported extensions
         self.image_files = sorted(
             [f for f in os.listdir(image_dir) if f.endswith((".tif", ".png", ".jpg"))]
         )
@@ -98,32 +175,35 @@ class InferenceDataset(Dataset):
         image_name = self.image_files[index]
         image_path = os.path.join(self.image_dir, image_name)
 
-        # Get original image dimensions
+        # Load basic metadata of the center image
         with rasterio.open(image_path) as src:
             height = src.height
             width = src.width
             transform = src.transform
 
+        # Find neighboring images within spatial proximity
         neighbors = find_neighbors(image_path)
 
-        # Calculate margin based on image size
+        # Compute output shape with margin based on patch size and keep ratio
         margin = calculate_margin(self.patch_size, self.keep_ratio)
         output_shape = (3, height + 2 * margin, width + 2 * margin)
 
+        # Combine center image with neighbors into a padded RGB array
         combined_image = combine_neighbors(
             neighbors, image_path, output_shape, nodata_value=0
         )
 
+        # Convert CHW (rasterio) to HWC and ensure RGB color space
         image = np.moveaxis(combined_image, 0, -1).astype(np.uint8)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
+        # Apply optional normalization/augmentation
         if self.transform:
             augmented = self.transform(image=image)
             image = augmented["image"]
 
+        # Convert to tensor in CHW format
         image = torch.tensor(image).permute(2, 0, 1).float()
-
-        print(f"📷 Loading: {image_name}")
 
         return {
             "image": image,
@@ -137,55 +217,97 @@ class InferenceDataset(Dataset):
 
 
 def find_neighbors(image_path, radius=500):
+    """
+    Finds neighboring image tiles (GeoTIFFs) that spatially overlap or are within a given buffer radius.
+
+    This function scans the directory of the input image and identifies all other `.tif` files
+    whose bounding boxes fall within a specified distance (`radius`) from the input image's bounds.
+    It is commonly used for stitching together adjacent tiles in tile-based inference or preprocessing.
+
+    Args:
+        image_path (str): Path to the center image file (GeoTIFF).
+        radius (int): Buffer distance in map units (e.g., meters) to consider as "neighboring".
+
+    Returns:
+        List[str]: List of file paths to neighboring image tiles within the radius.
+    """
+    # Read bounding box of the center image
     with rasterio.open(image_path) as src:
         bounds = src.bounds
 
     neighbors = []
-    for file in glob.glob(os.path.join(os.path.dirname(image_path), "*.tif")):
-        if file != image_path:
-            with rasterio.open(file) as src:
-                neighbor_bounds = src.bounds
-                if (
-                    neighbor_bounds.left <= bounds.right + radius
-                    and neighbor_bounds.right >= bounds.left - radius
-                    and neighbor_bounds.bottom <= bounds.top + radius
-                    and neighbor_bounds.top >= bounds.bottom - radius
-                ):
-                    neighbors.append(file)
+    search_dir = os.path.dirname(image_path)
+
+    # Iterate over all GeoTIFF files in the same directory
+    for file in glob.glob(os.path.join(search_dir, "*.tif")):
+        if file == image_path:
+            continue  # Skip the input image itself
+
+        with rasterio.open(file) as src:
+            neighbor_bounds = src.bounds
+
+            # Check whether neighbor image is within radius of the center image bounds
+            if (
+                neighbor_bounds.left <= bounds.right + radius
+                and neighbor_bounds.right >= bounds.left - radius
+                and neighbor_bounds.bottom <= bounds.top + radius
+                and neighbor_bounds.top >= bounds.bottom - radius
+            ):
+                neighbors.append(file)
+
     return neighbors
 
 
 def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
+    """
+    Combines a center image with its spatially adjacent neighbor images into a single larger canvas.
+
+    This function creates a new image of shape `output_shape`, places the center image in the middle,
+    and fills in surrounding pixels using available neighboring orthophotos. Only non-overlapping regions
+    (where `nodata_value` is present) are filled by neighbor data, preserving priority of the center tile.
+
+    Args:
+        neighbors (List[str]): Paths to neighboring image tiles (GeoTIFFs).
+        center_image (str): Path to the center image (GeoTIFF) that should be prioritized.
+        output_shape (Tuple[int, int, int]): Desired output image shape (C, H, W).
+        nodata_value (int or float): Fill value used for uninitialized pixels (default: 0).
+
+    Returns:
+        np.ndarray: Combined image array of shape (C, H, W) with center and neighbor data merged.
+    """
+    # Initialize the output array with nodata_value
     combined = np.full(output_shape, nodata_value, dtype=np.float32)
 
-    # First, handle the center image
+    # Insert the center image in the middle of the canvas
     with rasterio.open(center_image) as src:
-        center_data = src.read()[:3, :, :]
+        center_data = src.read()[:3, :, :]  # Only take the first 3 bands (RGB)
         center_h = (output_shape[1] - center_data.shape[1]) // 2
         center_w = (output_shape[2] - center_data.shape[2]) // 2
+
         combined[
             :,
             center_h : center_h + center_data.shape[1],
             center_w : center_w + center_data.shape[2],
         ] = center_data
 
-    # Handle neighbors if they exist
+    # Load and merge neighbor images if any exist
     valid_neighbors = [n for n in neighbors if os.path.exists(n)]
     if valid_neighbors:
         src_files = [rasterio.open(neighbor) for neighbor in valid_neighbors]
         try:
+            # Merge all neighbors into a single mosaic
             mosaic, transform = merge(src_files)
-            mosaic = mosaic[:3, :, :]  # force to RGB
+            mosaic = mosaic[:3, :, :]  # Keep only RGB bands
 
-            # Ensure mosaic doesn't exceed output dimensions
+            # Clip mosaic to output shape if needed
             mosaic_h = min(mosaic.shape[1], output_shape[1])
             mosaic_w = min(mosaic.shape[2], output_shape[2])
 
-            # Calculate offset to center the mosaic
+            # Center-align the mosaic in the output canvas
             offset_h = (output_shape[1] - mosaic_h) // 2
             offset_w = (output_shape[2] - mosaic_w) // 2
 
-            # Create mask for the target region
+            # Create a mask for areas in the combined image that are still nodata
             mask = (
                 combined[
                     :, offset_h : offset_h + mosaic_h, offset_w : offset_w + mosaic_w
@@ -193,11 +315,12 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
                 == nodata_value
             )
 
-            # Update only where mask is True
+            # Fill only nodata areas with the mosaic content (preserving center priority)
             combined[:, offset_h : offset_h + mosaic_h, offset_w : offset_w + mosaic_w][
                 mask
             ] = mosaic[:, :mosaic_h, :mosaic_w][mask]
         finally:
+            # Always close rasterio files
             for src in src_files:
                 src.close()
 
@@ -207,24 +330,50 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
 def sliding_window_inference_batched(
     model, images, num_classes, patch_size=1024, keep_ratio=0.7
 ):
+    """
+    Perform batched sliding-window inference on a batch of large images using a patch-based approach.
+
+    This function divides each input image into overlapping patches, runs them in a single batch
+    through the model, and reconstructs the full-size output by placing only the central region
+    (defined by `keep_ratio`) of each prediction back into the output tensor. This avoids boundary
+    artifacts while ensuring efficient GPU utilization.
+
+    Args:
+        model (torch.nn.Module): The trained model used for inference.
+        images (torch.Tensor): Input images of shape (B, C, H, W), where:
+            - B is batch size
+            - C is number of channels (e.g., 3 for RGB)
+            - H, W are height and width of the images.
+        num_classes (int): Number of output classes the model predicts.
+        patch_size (int): Size of the square patches to crop from each image.
+        keep_ratio (float): Proportion of the patch (e.g., 0.7) to retain from the center of the prediction,
+                            discarding the border to reduce edge artifacts.
+
+    Returns:
+        torch.Tensor: Prediction tensor of shape (B, num_classes, H, W) for each input image.
+    """
+    # Calculate inner region and stride based on keep ratio
     inner_size = int(patch_size * keep_ratio)
     outer_margin = (patch_size - inner_size) // 2
-    stride = inner_size
+    stride = inner_size  # No overlap in kept areas
 
     batch_size, _, H, W = images.shape
 
+    # Pad the images to make dimensions divisible by patch size
     pad_h = (patch_size - H % patch_size) % patch_size
     pad_w = (patch_size - W % patch_size) % patch_size
     images = nn.functional.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
     _, _, padded_H, padded_W = images.shape
 
+    # Initialize empty prediction tensor
     prediction = torch.zeros(
         (batch_size, num_classes, padded_H, padded_W), device=images.device
     )
 
     all_patches = []
-    patch_targets = []  # (image_index, h, w)
+    patch_targets = []  # To track where each patch belongs (batch, h, w)
 
+    # Extract patches from each image in the batch
     for b in range(batch_size):
         for h in range(0, padded_H - patch_size + 1, stride):
             for w in range(0, padded_W - patch_size + 1, stride):
@@ -232,12 +381,19 @@ def sliding_window_inference_batched(
                 all_patches.append(window)
                 patch_targets.append((b, h, w))
 
-    batch_patches = torch.cat(all_patches, dim=0)  # shape: [N, 3, 1024, 1024]
+    # Concatenate all patches into a single inference batch
+    batch_patches = torch.cat(
+        all_patches, dim=0
+    )  # shape: [N, C, patch_size, patch_size]
 
+    # Run inference in a single large batch
     with torch.no_grad():
         with torch.amp.autocast("cuda"):
-            batch_output = model(batch_patches)  # shape: [N, num_classes, 1024, 1024]
+            batch_output = model(
+                batch_patches
+            )  # shape: [N, num_classes, patch_size, patch_size]
 
+    # Place only the center (inner) part of each prediction into the output tensor
     for i, (b, h, w) in enumerate(patch_targets):
         prediction[
             b,
@@ -251,95 +407,78 @@ def sliding_window_inference_batched(
             outer_margin : outer_margin + inner_size,
         ]
 
+    # Crop back to original (unpadded) dimensions
     prediction = prediction[:, :, :H, :W]
+
     return prediction
 
 
-import time
-
-
 def fill_small_holes(geom, hole_area_threshold=100):
+    """
+    Removes small interior holes from a polygon or multipolygon geometry.
+
+    For each polygon, holes (interior rings) smaller than the given area threshold
+    are removed. This helps clean up noisy segmentation or classification artifacts
+    where small voids are not meaningful.
+
+    Args:
+        geom (shapely.geometry.Polygon or MultiPolygon): The input geometry.
+        hole_area_threshold (float): Minimum area (in projection units, e.g. m²) a hole must have to be kept.
+
+    Returns:
+        shapely.geometry.Polygon or MultiPolygon: Geometry with small holes removed.
+    """
     if isinstance(geom, Polygon):
+        # Keep only the outer boundary and holes above threshold
         outer = geom.exterior
         new_interiors = [
-            r for r in geom.interiors if Polygon(r).area > hole_area_threshold
+            ring for ring in geom.interiors if Polygon(ring).area > hole_area_threshold
         ]
         return Polygon(outer, new_interiors)
+
     elif isinstance(geom, MultiPolygon):
+        # Recursively apply to each part
         return MultiPolygon(
-            [fill_small_holes(p, hole_area_threshold) for p in geom.geoms]
+            [fill_small_holes(part, hole_area_threshold) for part in geom.geoms]
         )
+
+    # Return original geometry if not a polygonal type
     return geom
 
 
-def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_area=1):
-    print("⏱️ merging connected components...")
-    t_start = time.time()
-
-    gdf = gdf[gdf.is_valid].copy()
-    gdf = gdf[gdf["DN"] != 0].copy()
-    gdf["area"] = gdf.geometry.area
-    gdf = gdf.reset_index(drop=True)
-
-    sindex = gdf.sindex
-    G = nx.Graph()
-
-    for i, row in gdf.iterrows():
-        G.add_node(i)
-        geom_i = row.geometry
-        area_i = row.area
-        matches = list(sindex.intersection(geom_i.bounds))
-        if i in matches:
-            matches.remove(i)
-        for j in matches:
-            geom_j = gdf.geometry[j]
-            area_j = gdf.area[j]
-            if geom_i.buffer(0.5).intersects(geom_j):
-                if not (area_i >= area_threshold and area_j >= area_threshold):
-                    G.add_edge(i, j)
-
-    merged_polygons = []
-    merged_classes = []
-
-    for component in nx.connected_components(G):
-        group = gdf.loc[list(component)]
-        if len(group) == 1:
-            merged_geom = group.geometry.values[0]
-        else:
-            merged_geom = unary_union(group.geometry)
-        largest = group.sort_values("area", ascending=False).iloc[0]
-        merged_polygons.append(merged_geom)
-        merged_classes.append(largest["DN"])
-
-    result = gpd.GeoDataFrame(
-        {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
-    )
-    result["area"] = result.geometry.area
-    result = result[result["area"] >= min_area].copy()
-
-    print(f"✅ merging done in {time.time() - t_start:.2f}s")
-    return result
-
-
 def merge_touching_polygons_spatial(gdf, area_threshold=100, min_area=1):
-    print("⏱️ merging with spatial join...")
+    """
+    Merges spatially touching polygons if at least one of them is smaller than the area threshold.
+
+    This function uses a spatial join to identify touching polygons and merges them into connected
+    components (groups of mutually touching small polygons). Each group is unified into a single geometry,
+    and the dominant class label (DN) is taken from the largest polygon in the group.
+
+    Args:
+        gdf (GeoDataFrame): Input GeoDataFrame with at least a 'DN' column and valid polygon geometries.
+        area_threshold (float): Maximum area threshold below which polygons are considered for merging.
+        min_area (float): Minimum area threshold for the output geometries; smaller ones will be discarded.
+
+    Returns:
+        GeoDataFrame: Cleaned and merged geometries with updated class labels and filtered small areas.
+    """
     t_start = time.time()
 
-    # 1. Entferne ungültige Geometrien, Hintergrund & berechne Fläche
+    # Step 1: Remove invalid geometries and background class (DN == 0)
     gdf = gdf[gdf.is_valid].copy()
     gdf = gdf[gdf["DN"] != 0].copy()
     gdf["area"] = gdf.geometry.area
     gdf = gdf.reset_index(drop=True)
 
-    # 2. Finde alle berührenden Nachbarn per spatial join
+    # Step 2: Find touching polygons using spatial join
     joined = gpd.sjoin(gdf, gdf, predicate="touches", how="left")
     joined = joined.dropna(subset=["index_right"])
-    joined = joined[joined.index != joined["index_right"]]
+    joined = joined[joined.index != joined["index_right"]]  # Remove self-matches
 
-    # 3. Gruppiere nur solche, wo mindestens eines < threshold ist
+    # Step 3: Build pairwise groups where at least one polygon is below area threshold
     groups = {}
     for idx, row in joined.iterrows():
-        i, j = idx, row["index_right"]
+        i, j = idx, int(row["index_right"])
         area_i = gdf.loc[i, "area"]
         area_j = gdf.loc[j, "area"]
         if area_i < area_threshold or area_j < area_threshold:
@@ -348,10 +487,9 @@ def merge_touching_polygons_spatial(gdf, area_threshold=100, min_area=1):
             groups.setdefault(j, set()).add(j)
             groups[j].add(i)
 
-    # 4. Bilde Komponenten (wie connected components)
+    # Step 4: Extract connected components from groups (depth-first search)
     visited = set()
     components = []
-
     for node in groups:
         if node not in visited:
             stack = [node]
@@ -364,10 +502,9 @@ def merge_touching_polygons_spatial(gdf, area_threshold=100, min_area=1):
                     stack.extend(groups.get(n, []))
             components.append(comp)
 
-    # 5. Merge Komponentengeometrien (und DN übernehmen vom größten)
+    # Step 5: Merge geometries in each component and assign DN from largest polygon
     merged_geoms = []
     merged_classes = []
-
     for comp in components:
         group = gdf.loc[list(comp)]
         if len(group) == 1:
@@ -378,79 +515,117 @@ def merge_touching_polygons_spatial(gdf, area_threshold=100, min_area=1):
             largest = group.sort_values("area", ascending=False).iloc[0]
             merged_classes.append(largest["DN"])
 
-    # 6. Füge gemergte + unberührte zusammen
+    # Step 6: Combine merged with untouched geometries
     merged = gpd.GeoDataFrame(
         {"DN": merged_classes, "geometry": merged_geoms}, crs=gdf.crs
     )
     untouched = gdf.drop(index=set().union(*components), errors="ignore")
     result = pd.concat([merged, untouched], ignore_index=True)
 
-    # 7. Entferne kleine Restflächen
+    # Step 7: Remove very small leftover geometries
     result["area"] = result.geometry.area
     result = result[result["area"] >= min_area].copy()
 
-    print(f"✅ merge done in {time.time() - t_start:.2f}s")
     return result
 
 
 def polygonize_raster_to_geopackage(
     tif_path, output_gpkg, area_threshold=100, min_area=1, hole_area_threshold=100
 ):
-    print(f"📦 Processing {Path(tif_path).name}")
-    t_total = time.time()
+    """
+    Converts a classified raster into polygons, merges small touching regions,
+    removes tiny areas, and fills small interior holes. The final result is saved as a GeoPackage.
 
-    t1 = time.time()
+    Args:
+        tif_path (str): Path to the input classified raster file (GeoTIFF).
+        output_gpkg (str): Output path for the resulting GeoPackage file.
+        area_threshold (float): Maximum area (in projection units) below which polygons are candidates for merging.
+        min_area (float): Minimum area to retain in the final result; smaller features are discarded.
+        hole_area_threshold (float): Interior holes smaller than this threshold will be removed.
+
+    Returns:
+        None. Saves the processed polygons directly to a `.gpkg` file.
+    """
+
+    # --- Step 1: Polygonize the raster ---
     with rasterio.open(tif_path) as src:
         image = src.read(1)
-        mask = image != 0
+        mask = image != 0  # Only polygonize non-zero regions
         results = (
             {"properties": {"DN": int(v)}, "geometry": s}
             for s, v in shapes(image, mask=mask, transform=src.transform)
         )
         geoms = list(results)
         gdf = gpd.GeoDataFrame.from_features(geoms, crs=src.crs)
-    print(f"⏱️ polygonize (shapes): {time.time() - t1:.2f}s")
 
-    t2 = time.time()
+    # --- Step 2: Pre-filtering and area computation ---
     gdf = gdf[gdf.is_valid].copy()
     gdf = gdf[gdf["DN"] != 0].copy()
     gdf["area"] = gdf.geometry.area
     gdf = gdf.reset_index(drop=True)
-    print(f"⏱️ filtering & area calc: {time.time() - t2:.2f}s")
 
+    # --- Step 3: Merge small touching polygons based on spatial connectivity ---
     result = merge_touching_polygons_spatial(gdf, area_threshold, min_area)
 
-    t3 = time.time()
+    # --- Step 4: Fill small interior holes in valid Polygons only ---
     has_holes = result.geometry.apply(
         lambda g: isinstance(g, Polygon) and len(g.interiors) > 0
     )
     result.loc[has_holes, "geometry"] = result.loc[has_holes, "geometry"].apply(
         lambda g: fill_small_holes(g, hole_area_threshold)
     )
-    print(f"⏱️ fill small holes: {time.time() - t3:.2f}s")
 
-    t4 = time.time()
+    # --- Step 5: Final area filtering and export ---
     result["area"] = result.geometry.area
     result = result[result["area"] >= min_area].copy()
     result.to_file(output_gpkg, driver="GPKG")
-    print(f"⏱️ save to GPKG: {time.time() - t4:.2f}s")
-
-    print(f"✅ Total time: {time.time() - t_total:.2f}s")
 
 
 def process_image(image_path):
+    """
+    Processes a single raster file by converting it to polygons and cleaning the result.
+
+    This function:
+    - Converts the input `.tif` classification raster to vector polygons
+    - Merges small touching polygons
+    - Removes tiny holes and features
+    - Saves the cleaned output as a `.gpkg` GeoPackage file
+
+    Args:
+        image_path (str): Path to the input `.tif` raster file.
+
+    Returns:
+        str: Path to the output `.gpkg` file.
+    """
     output_gpkg = image_path.replace(".tif", ".gpkg")
+
     polygonize_raster_to_geopackage(
         tif_path=image_path,
         output_gpkg=output_gpkg,
-        area_threshold=100,
-        min_area=1,
-        hole_area_threshold=100,
+        area_threshold=100,  # Merge if one polygon is < 100 m²
+        min_area=1,  # Remove any polygons < 1 m²
+        hole_area_threshold=100,  # Fill holes smaller than 100 m²
     )
+
     return output_gpkg
 
 
 def run_parallel_polygonization(image_paths, max_workers=4):
+    """
+    Executes polygonization and postprocessing of raster files in parallel.
+
+    This function distributes the workload across multiple processes using
+    Python's ProcessPoolExecutor. It is especially useful when working with
+    large collections of raster files (e.g., segmentation masks).
+
+    Args:
+        image_paths (List[str]): A list of `.tif` raster file paths to process.
+        max_workers (int): Maximum number of parallel processes.
+                           If None, it defaults to (number of CPUs - 1).
+
+    Returns:
+        List[str]: List of output GeoPackage paths generated from each input raster.
+    """
     if max_workers is None:
         max_workers = max(1, cpu_count() - 1)
 
@@ -461,9 +636,19 @@ def run_parallel_polygonization(image_paths, max_workers=4):
 
 
 def main():
+    """
+    Main execution function for large-scale raster segmentation inference.
+
+    This function:
+    - Loads the trained model checkpoint
+    - Runs inference on each image using sliding window with batched patches
+    - Writes prediction results as GeoTIFFs with original metadata
+    - Polygonizes predictions and postprocesses using parallel processing
+    """
     args = get_args()
     seed_everything(42)
 
+    # Load configuration and model from checkpoint
     config = py2cfg(args.config_path)
     model = Supervision_Train.load_from_checkpoint(
         os.path.join(config.weights_path, config.test_weights_name + ".ckpt"),
@@ -473,6 +658,7 @@ def main():
     model = torch.nn.DataParallel(model)
     model.eval()
 
+    # Prepare dataset and dataloader
     dataset = InferenceDataset(
         image_dir=args.image_path,
         patch_size=args.patch_size,
@@ -483,19 +669,15 @@ def main():
 
     os.makedirs(args.output_path, exist_ok=True)
 
+    # Process each batch of large images
     for batch in tqdm(dataloader, desc="Processing Images"):
-
         start_time = time.time()
 
-        # Move images to GPU
         images = batch["image"].cuda()
         image_names = batch["image_name"]
-
-        # Store original metadata
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
-        start_time_prediction = time.time()
-
+        # Run inference using batched sliding windows
         predictions = sliding_window_inference_batched(
             model,
             images,
@@ -503,55 +685,38 @@ def main():
             patch_size=args.patch_size,
             keep_ratio=args.keep_ratio,
         )
-
-        end_time_prediction = time.time()
-        elapsed_prediction = end_time_prediction - start_time_prediction
-        print(f"⏱️  Time taken for prediction: {elapsed_prediction:.2f} seconds")
-
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
+
         written_tif_paths = []
 
+        # Write predicted masks to GeoTIFF files with original georeferencing
         for i in range(len(images)):
-            prediction = predictions[i]
-            prediction_np = prediction.cpu().numpy().astype(np.uint8)
-
-            # Use original input path to preserve exact geospatial reference
+            prediction = predictions[i].cpu().numpy().astype(np.uint8)
             input_path = input_paths[i]
             output_file = os.path.join(args.output_path, image_names[i])
             written_tif_paths.append(output_file)
 
-            # Open original image to get exact metadata
             with rasterio.open(input_path) as src:
-                # Get original image dimensions and transform
-                original_transform = src.transform
-                original_crs = src.crs
-
-                # Determine crop parameters if needed
                 height, width = src.height, src.width
 
-                # Ensure prediction matches original image exactly
-                if prediction_np.shape != (height, width):
-                    # Center crop or pad to match original image
-                    center_h = (prediction_np.shape[0] - height) // 2
-                    center_w = (prediction_np.shape[1] - width) // 2
-                    prediction_np = prediction_np[
+                # Center crop prediction to match original image size
+                if prediction.shape != (height, width):
+                    center_h = (prediction.shape[0] - height) // 2
+                    center_w = (prediction.shape[1] - width) // 2
+                    prediction = prediction[
                         center_h : center_h + height, center_w : center_w + width
                     ]
 
-                # Write output with original geospatial metadata
                 profile = src.profile
                 profile.update(
                     dtype=rasterio.uint8, count=1, compress="lzw", photometric=None
                 )
 
                 with rasterio.open(output_file, "w", **profile) as dst:
-                    dst.write(prediction_np.astype(rasterio.uint8), 1)
+                    dst.write(prediction, 1)
 
+        # Postprocess and polygonize results in parallel
         run_parallel_polygonization(written_tif_paths)
-
-        end_time = time.time()
-        elapsed = end_time - start_time
-        print(f"⏱️  Time taken for {image_names[0]}: {elapsed:.2f} seconds")
 
 
 if __name__ == "__main__":
