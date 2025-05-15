@@ -1,7 +1,9 @@
+import argparse
+import glob
 import os
 import time
-import glob
-import argparse
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import cpu_count
 from pathlib import Path
 
 # Scientific and numerical libraries
@@ -11,7 +13,7 @@ import pandas as pd
 # PyTorch and related
 import torch
 from torch import nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
 
 # Image processing and augmentation
@@ -19,11 +21,11 @@ import cv2
 import albumentations as albu
 
 # Geospatial
-import rasterio
-from rasterio.merge import merge
-from rasterio.features import shapes
 import geopandas as gpd
-from shapely.geometry import Polygon, MultiPolygon
+import rasterio
+from rasterio.features import shapes
+from rasterio.merge import merge
+from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 # Graphs
@@ -255,74 +257,6 @@ def sliding_window_inference_batched(
     return prediction
 
 
-def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_area=1):
-    # Step 1: Clean invalid geometries and remove class 0
-    gdf = gdf[gdf.is_valid].copy()
-    gdf = gdf[gdf["DN"] != 0].copy()
-    gdf["area"] = gdf.geometry.area
-    gdf = gdf.reset_index(drop=True)
-
-    # Step 2: Build spatial index
-    sindex = gdf.sindex
-
-    # Step 3: Create graph of connected polygons
-    G = nx.Graph()
-
-    for i, row in gdf.iterrows():
-        G.add_node(i)
-
-        geom_i = row.geometry
-        area_i = row.area
-
-        possible_matches_index = list(sindex.intersection(geom_i.bounds))
-        possible_matches_index.remove(i)
-
-        for j in possible_matches_index:
-            geom_j = gdf.geometry[j]
-            area_j = gdf.area[j]
-
-            if geom_i.buffer(0.5).intersects(geom_j):
-                # Don't connect two large polygons
-                if not (area_i >= area_threshold and area_j >= area_threshold):
-                    G.add_edge(i, j)
-
-    # Step 4: Merge connected components
-    merged_polygons = []
-    merged_classes = []
-
-    for component in nx.connected_components(G):
-        group = gdf.loc[list(component)]
-        merged_geom = unary_union(group.geometry)
-        largest = group.sort_values("area", ascending=False).iloc[0]
-        merged_polygons.append(merged_geom)
-        merged_classes.append(largest["DN"])
-
-    # Step 5: Build result GeoDataFrame and clean up
-    result = gpd.GeoDataFrame(
-        {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
-    )
-    result["area"] = result.geometry.area
-    result = result[result["area"] >= min_area].copy()
-
-    return result
-
-
-def fill_small_holes(geom, hole_area_threshold=100):
-    if isinstance(geom, Polygon):
-        outer = geom.exterior
-        new_interiors = [
-            r for r in geom.interiors if Polygon(r).area > hole_area_threshold
-        ]
-        return Polygon(outer, new_interiors)
-
-    elif isinstance(geom, MultiPolygon):
-        return MultiPolygon(
-            [fill_small_holes(p, hole_area_threshold) for p in geom.geoms]
-        )
-
-    return geom  # fallback (in case of unexpected geometry type)
-
-
 def polygonize_raster_to_geopackage(
     tif_path, output_gpkg, area_threshold=100, min_area=1, hole_area_threshold=100
 ):
@@ -400,6 +334,114 @@ def polygonize_raster_to_geopackage(
     result.to_file(output_gpkg, driver="GPKG")
     print(f"✅ Saved: {output_gpkg}")
 
+    # Re-import everything due to kernel reset
+
+
+def fill_small_holes(geom, hole_area_threshold=100):
+    if isinstance(geom, Polygon):
+        outer = geom.exterior
+        new_interiors = [
+            r for r in geom.interiors if Polygon(r).area > hole_area_threshold
+        ]
+        return Polygon(outer, new_interiors)
+    elif isinstance(geom, MultiPolygon):
+        return MultiPolygon(
+            [fill_small_holes(p, hole_area_threshold) for p in geom.geoms]
+        )
+    return geom
+
+
+def merge_touching_polygons_connected_components(gdf, area_threshold=100, min_area=1):
+    gdf = gdf[gdf.is_valid].copy()
+    gdf = gdf[gdf["DN"] != 0].copy()
+    gdf["area"] = gdf.geometry.area
+    gdf = gdf.reset_index(drop=True)
+
+    sindex = gdf.sindex
+    G = nx.Graph()
+
+    for i, row in gdf.iterrows():
+        G.add_node(i)
+        geom_i = row.geometry
+        area_i = row.area
+        matches = list(sindex.intersection(geom_i.bounds))
+        if i in matches:
+            matches.remove(i)
+        for j in matches:
+            geom_j = gdf.geometry[j]
+            area_j = gdf.area[j]
+            if geom_i.buffer(0.5).intersects(geom_j):
+                if not (area_i >= area_threshold and area_j >= area_threshold):
+                    G.add_edge(i, j)
+
+    merged_polygons = []
+    merged_classes = []
+
+    for component in nx.connected_components(G):
+        group = gdf.loc[list(component)]
+        merged_geom = unary_union(group.geometry)
+        largest = group.sort_values("area", ascending=False).iloc[0]
+        merged_polygons.append(merged_geom)
+        merged_classes.append(largest["DN"])
+
+    result = gpd.GeoDataFrame(
+        {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
+    )
+    result["area"] = result.geometry.area
+    result = result[result["area"] >= min_area].copy()
+
+    return result
+
+
+def polygonize_raster_to_geopackage(
+    tif_path, output_gpkg, area_threshold=100, min_area=1, hole_area_threshold=100
+):
+    with rasterio.open(tif_path) as src:
+        image = src.read(1)
+        mask = image != 0
+        results = (
+            {"properties": {"DN": int(v)}, "geometry": s}
+            for s, v in shapes(image, mask=mask, transform=src.transform)
+        )
+        geoms = list(results)
+        gdf = gpd.GeoDataFrame.from_features(geoms, crs=src.crs)
+
+    gdf = gdf[gdf.is_valid].copy()
+    gdf = gdf[gdf["DN"] != 0].copy()
+    gdf["area"] = gdf.geometry.area
+    gdf = gdf.reset_index(drop=True)
+
+    result = merge_touching_polygons_connected_components(gdf, area_threshold, min_area)
+    result["geometry"] = result["geometry"].apply(
+        lambda g: fill_small_holes(g, hole_area_threshold)
+    )
+    result["area"] = result.geometry.area
+    result = result[result["area"] >= min_area].copy()
+    result.to_file(output_gpkg, driver="GPKG")
+    print(f"✅ Saved: {output_gpkg}")
+
+
+def process_image(image_path):
+    output_gpkg = image_path.replace(".tif", "_cleaned.gpkg")
+    polygonize_raster_to_geopackage(
+        tif_path=image_path,
+        output_gpkg=output_gpkg,
+        area_threshold=100,
+        min_area=1,
+        hole_area_threshold=100,
+    )
+    return output_gpkg
+
+
+def run_parallel_polygonization(image_paths, max_workers=None):
+    if max_workers is None:
+        max_workers = max(1, cpu_count() - 1)
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(process_image, image_paths))
+
+    return results
+
 
 def main():
     args = get_args()
@@ -450,6 +492,7 @@ def main():
         print(f"⏱️  Time taken for prediction: {elapsed_prediction:.2f} seconds")
 
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
+        written_tif_paths = []
 
         for i in range(len(images)):
             prediction = predictions[i]
@@ -458,6 +501,7 @@ def main():
             # Use original input path to preserve exact geospatial reference
             input_path = input_paths[i]
             output_file = os.path.join(args.output_path, image_names[i])
+            written_tif_paths.append(output_file)
 
             # Open original image to get exact metadata
             with rasterio.open(input_path) as src:
@@ -486,32 +530,14 @@ def main():
                 with rasterio.open(output_file, "w", **profile) as dst:
                     dst.write(prediction_np.astype(rasterio.uint8), 1)
 
-            # # Convert to shapefile
-            # os.system(
-            #     f"gdal_polygonize.py -q {output_file} -f 'ESRI Shapefile' "
-            #     f"{output_file.replace('.tif', '.shp')}"
+            # polygonize_raster_to_geopackage(
+            #     tif_path=f"{output_file}",
+            #     output_gpkg=f"{output_file.replace('.tif', '.gpkg')}",
+            #     area_threshold=100,
+            #     min_area=1,
+            #     hole_area_threshold=100,
             # )
-            # # Merge small touching polygons
-            # gdf = gpd.read_file(output_file.replace(".tif", ".shp"))
-            # result = merge_touching_polygons_connected_components(
-            #     gdf, area_threshold=100, min_area=1
-            # )
-            # # Fill small holes
-            # result["geometry"] = result["geometry"].apply(
-            #     lambda g: fill_small_holes(g, hole_area_threshold=100)
-            # )
-
-            # result.to_file(
-            #     output_file.replace(".tif", "_merged.shp"), driver="ESRI Shapefile"
-            # )
-
-            polygonize_raster_to_geopackage(
-                tif_path=f"{output_file}",
-                output_gpkg=f"{output_file.replace('.tif', '.gpkg')}",
-                area_threshold=100,
-                min_area=1,
-                hole_area_threshold=100,
-            )
+        run_parallel_polygonization(written_tif_paths)
 
         end_time = time.time()
         elapsed = end_time - start_time
