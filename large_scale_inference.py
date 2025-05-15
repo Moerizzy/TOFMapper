@@ -333,7 +333,8 @@ def merge_touching_polygons_spatial(gdf, area_threshold=100, min_area=1):
 
     # 2. Finde alle berührenden Nachbarn per spatial join
     joined = gpd.sjoin(gdf, gdf, predicate="touches", how="left")
-    joined = joined[joined.index != joined.index_right]
+    joined = joined.dropna(subset=["index_right"])
+    joined = joined[joined.index != joined["index_right"]]
 
     # 3. Gruppiere nur solche, wo mindestens eines < threshold ist
     groups = {}
