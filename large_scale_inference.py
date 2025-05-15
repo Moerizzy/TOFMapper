@@ -267,22 +267,20 @@ def merge_small_touching_polygons(shp_path, output_path, area_threshold=100):
             # Merge the small polygon with the largest touching polygon
             merged_geom = small_row.geometry.union(largest.geometry)
             merged_polygons.append(merged_geom)
-            merged_classes.append(largest["class"])
+            merged_classes.append(largest["DN"])
         else:
             # If no touching polygons, keep the small polygon as is
             merged_polygons.append(small_row.geometry)
-            merged_classes.append(small_row["class"])
+            merged_classes.append(small_row["DN"])
 
     # 3. Create a new GeoDataFrame for merged small polygons
     gdf_merged_small = gpd.GeoDataFrame(
-        {"class": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
+        {"DN": merged_classes, "geometry": merged_polygons}, crs=gdf.crs
     )
 
     # 4. Merge the small polygons with the large ones
-    result = pd.concat(
-        [large[["class", "geometry"]], gdf_merged_small], ignore_index=True
-    )
-    result = result.dissolve(by=["class"])  # optional geometrisch vereinen pro Klasse
+    result = pd.concat([large[["DN", "geometry"]], gdf_merged_small], ignore_index=True)
+    result = result.dissolve(by=["DN"])  # optional geometrisch vereinen pro Klasse
     result = result.explode(index_parts=False).reset_index(
         drop=True
     )  # vereinzelte Polygone aufteilen
