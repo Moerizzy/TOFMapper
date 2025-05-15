@@ -274,7 +274,9 @@ def merge_touching_polygons_with_threshold(
             if j in visited:
                 continue
             other = gdf.loc[j]
-            if geom.touches(other.geometry):
+            if geom.intersects(other.geometry) and not (
+                geom.area >= area_threshold and other.area >= area_threshold
+            ):
                 # Check merging rule
                 if area >= area_threshold and other.area >= area_threshold:
                     continue  # skip large + large
