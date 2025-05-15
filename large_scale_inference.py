@@ -102,7 +102,6 @@ class InferenceDataset(Dataset):
         image = torch.tensor(image).permute(2, 0, 1).float()
 
         print(f"📷 Loading: {image_name}")
-        print(f"   Original size: {height}x{width}, with margin: {margin}")
 
         return {
             "image": image,
@@ -131,6 +130,9 @@ def find_neighbors(image_path, radius=500):
                     and neighbor_bounds.top >= bounds.bottom - radius
                 ):
                     neighbors.append(file)
+    print(
+        f"   Found {len(neighbors)} neighbors for {image_path} and merged their corners."
+    )
     return neighbors
 
 
@@ -334,7 +336,7 @@ def main():
         keep_ratio=args.keep_ratio,
         transform=albu.Normalize(),
     )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
     os.makedirs(args.output_path, exist_ok=True)
 
@@ -355,7 +357,7 @@ def main():
             num_classes=config.num_classes,
             patch_size=args.patch_size,
             keep_ratio=args.keep_ratio,
-            patch_batch_size=16,  # Adjust to fit GPU memory
+            patch_batch_size=args.batch_size,  # Adjust to fit GPU memory
         )
 
         predictions = nn.Softmax(dim=1)(predictions).argmax(dim=1)
