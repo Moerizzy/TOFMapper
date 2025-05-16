@@ -737,6 +737,7 @@ def sliding_window_inference_entropy_hann(
     _, _, padded_H, padded_W = images.shape
 
     hann_window = create_hann_window(keep_size, device=images.device)
+    hann_window = hann_window.squeeze(0).repeat(num_classes, 1, 1)
 
     pred_map = torch.zeros(
         (batch_size, num_classes, padded_H, padded_W), device=images.device
