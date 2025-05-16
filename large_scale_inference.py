@@ -115,34 +115,7 @@ def get_args():
         help="Number of full images to process per batch. Default: 2",
     )
 
-    # Portion of each patch to retain (center area); the rest is margin
-    parser.add_argument(
-        "-kr",
-        "--keep_ratio",
-        type=float,
-        default=0.7,
-        help="Fraction of the patch to retain (e.g. 0.7 keeps center 70%%). Default: 0.7",
-    )
-
     return parser.parse_args()
-
-
-def calculate_margin(patch_size, keep_ratio):
-    """
-    Calculates the margin size to add around the central patch for context.
-
-    In patch-based inference, only the central part of the patch (defined by `keep_ratio`)
-    is used for prediction to avoid edge artifacts. This function computes the size of the
-    outer margin to be added equally on all sides.
-
-    Args:
-        patch_size (int): The size of the full square patch (e.g., 1024).
-        keep_ratio (float): The ratio of the patch (0 < keep_ratio ≤ 1) to retain for prediction.
-
-    Returns:
-        int: The margin (in pixels) to add to each side of the patch.
-    """
-    return int((1 - keep_ratio) * patch_size / 2)
 
 
 class InferenceDataset(Dataset):
@@ -157,14 +130,13 @@ class InferenceDataset(Dataset):
     Args:
         image_dir (str): Path to the directory containing input image tiles (GeoTIFF, PNG, JPG).
         patch_size (int): Patch size used for inference (used to calculate margin).
-        keep_ratio (float): Fraction of the patch used for the inner prediction (used for margin calculation).
         transform (albumentations.BasicTransform, optional): Transformations to apply to the input image (e.g., normalization).
     """
 
-    def __init__(self, image_dir, patch_size, keep_ratio, transform=None):
+    def __init__(self, image_dir, patch_size, transform=None):
         self.image_dir = image_dir
         self.patch_size = patch_size
-        self.keep_ratio = keep_ratio
+        self.margin = patch_size // 2
         self.transform = transform
 
         # Load and sort image file names with supported extensions
@@ -188,8 +160,7 @@ class InferenceDataset(Dataset):
         neighbors = find_neighbors(image_path)
 
         # Compute output shape with margin based on patch size and keep ratio
-        margin = calculate_margin(self.patch_size, self.keep_ratio)
-        output_shape = (3, height + 2 * margin, width + 2 * margin)
+        output_shape = (3, height + 2 * self.margin, width + 2 * self.margin)
 
         # Combine center image with neighbors into a padded RGB array
         combined_image = combine_neighbors(
@@ -328,92 +299,6 @@ def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
                 src.close()
 
     return combined
-
-
-def sliding_window_inference_batched(
-    model, images, num_classes, patch_size=1024, keep_ratio=0.7
-):
-    """
-    Perform batched sliding-window inference on a batch of large images using a patch-based approach.
-
-    This function divides each input image into overlapping patches, runs them in a single batch
-    through the model, and reconstructs the full-size output by placing only the central region
-    (defined by `keep_ratio`) of each prediction back into the output tensor. This avoids boundary
-    artifacts while ensuring efficient GPU utilization.
-
-    Args:
-        model (torch.nn.Module): The trained model used for inference.
-        images (torch.Tensor): Input images of shape (B, C, H, W), where:
-            - B is batch size
-            - C is number of channels (e.g., 3 for RGB)
-            - H, W are height and width of the images.
-        num_classes (int): Number of output classes the model predicts.
-        patch_size (int): Size of the square patches to crop from each image.
-        keep_ratio (float): Proportion of the patch (e.g., 0.7) to retain from the center of the prediction,
-                            discarding the border to reduce edge artifacts.
-
-    Returns:
-        torch.Tensor: Prediction tensor of shape (B, num_classes, H, W) for each input image.
-    """
-    # Calculate inner region and stride based on keep ratio
-    inner_size = int(patch_size * keep_ratio)
-    outer_margin = (patch_size - inner_size) // 2
-    stride = inner_size  # No overlap in kept areas
-
-    batch_size, _, H, W = images.shape
-
-    # Pad the images to make dimensions divisible by patch size
-    pad_h = (patch_size - H % patch_size) % patch_size
-    pad_w = (patch_size - W % patch_size) % patch_size
-    images = nn.functional.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
-    _, _, padded_H, padded_W = images.shape
-
-    # Initialize empty prediction tensor
-    prediction = torch.zeros(
-        (batch_size, num_classes, padded_H, padded_W), device=images.device
-    )
-
-    all_patches = []
-    patch_targets = []  # To track where each patch belongs (batch, h, w)
-
-    # Extract patches from each image in the batch
-    for b in range(batch_size):
-        for h in range(0, padded_H - patch_size + 1, stride):
-            for w in range(0, padded_W - patch_size + 1, stride):
-                window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
-                all_patches.append(window)
-                patch_targets.append((b, h, w))
-
-    # Concatenate all patches into a single inference batch
-    batch_patches = torch.cat(
-        all_patches, dim=0
-    )  # shape: [N, C, patch_size, patch_size]
-
-    # Run inference in a single large batch
-    with torch.no_grad():
-        with torch.amp.autocast("cuda"):
-            batch_output = model(
-                batch_patches
-            )  # shape: [N, num_classes, patch_size, patch_size]
-
-    # Place only the center (inner) part of each prediction into the output tensor
-    for i, (b, h, w) in enumerate(patch_targets):
-        prediction[
-            b,
-            :,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = batch_output[
-            i,
-            :,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-
-    # Crop back to original (unpadded) dimensions
-    prediction = prediction[:, :, :H, :W]
-
-    return prediction
 
 
 def fill_small_holes(geom, hole_area_threshold=100):
@@ -638,72 +523,6 @@ def run_parallel_polygonization(image_paths, max_workers=4):
     return results
 
 
-def sliding_window_inference_batched_entropy(
-    model, images, num_classes, patch_size=1024, keep_ratio=0.7
-):
-    """
-    Batched sliding-window inference with softmax entropy computation (no MC dropout).
-    Returns prediction logits and entropy map.
-    """
-    inner_size = int(patch_size * keep_ratio)
-    outer_margin = (patch_size - inner_size) // 2
-    stride = inner_size
-
-    batch_size, _, H, W = images.shape
-    pad_h = (patch_size - H % patch_size) % patch_size
-    pad_w = (patch_size - W % patch_size) % patch_size
-    images = F.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
-    _, _, padded_H, padded_W = images.shape
-
-    all_patches = []
-    patch_targets = []
-    for b in range(batch_size):
-        for h in range(0, padded_H - patch_size + 1, stride):
-            for w in range(0, padded_W - patch_size + 1, stride):
-                window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
-                all_patches.append(window)
-                patch_targets.append((b, h, w))
-
-    patch_tensor = torch.cat(all_patches, dim=0)
-
-    model.eval()
-    with torch.no_grad():
-        with torch.amp.autocast("cuda"):
-            logits = model(patch_tensor)
-
-    softmax_probs = F.softmax(logits, dim=1)
-    entropy = -(softmax_probs * torch.log(softmax_probs + 1e-8)).sum(dim=1)
-
-    pred_map = torch.zeros(
-        (batch_size, num_classes, padded_H, padded_W), device=images.device
-    )
-    entropy_map = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
-
-    for i, (b, h, w) in enumerate(patch_targets):
-        pred_map[
-            b,
-            :,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = logits[
-            i,
-            :,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-        entropy_map[
-            b,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = entropy[
-            i,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-
-    return pred_map[:, :, :H, :W], entropy_map[:, :H, :W]
-
-
 def sliding_window_inference_entropy_hann(model, images, patch_size=1024, stride=512):
     """
     Sliding window inference with Hann-weighting over full patch area.
@@ -719,8 +538,6 @@ def sliding_window_inference_entropy_hann(model, images, patch_size=1024, stride
         pred_map (Tensor): (B, num_classes, H, W)
         entropy_map (Tensor): (B, H, W)
     """
-    import torch
-    import torch.nn.functional as F
 
     def create_hann_window(size, device):
         """Generates a 2D Hann window of shape (1, 1, H, W)"""
@@ -900,7 +717,6 @@ def main():
     dataset = InferenceDataset(
         image_dir=args.image_path,
         patch_size=args.patch_size,
-        keep_ratio=args.keep_ratio,
         transform=albu.Normalize(),
     )
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
@@ -909,26 +725,16 @@ def main():
 
     # Process each batch of large images
     for batch in tqdm(dataloader, desc="Processing Images"):
-        start_time = time.time()
 
         images = batch["image"].cuda()
         image_names = batch["image_name"]
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
-        # # Run MC Dropout inference with basic softmax entropy, MC entropy, and MC std
-        # logits, entropy_map_basic = sliding_window_inference_batched_entropy(
-        #     model,
-        #     images,
-        #     num_classes=config.num_classes,
-        #     patch_size=args.patch_size,
-        #     keep_ratio=args.keep_ratio,
-        # )
-
         logits, entropy_map_basic = sliding_window_inference_entropy_hann(
             model,
             images,
             patch_size=args.patch_size,
-            stride=512,
+            stride=args.patch_size // 2,
         )
 
         predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
