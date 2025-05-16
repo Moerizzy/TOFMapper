@@ -716,28 +716,35 @@ def sliding_window_inference_entropy_hann(
         num_classes (int): number of output classes
         patch_size (int): size of square patch (default: 1024)
         stride (int): step between patches (controls overlap)
+
     Returns:
         pred_map (Tensor): (B, num_classes, H, W)
         entropy_map (Tensor): (B, H, W)
     """
+    import torch
     import torch.nn.functional as F
 
-    def create_hann_window(size: int, device):
+    def create_hann_window(size: int, device, channels: int):
         hann_1d = torch.hann_window(size, periodic=False, device=device)
-        return torch.outer(hann_1d, hann_1d).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+        hann_2d = torch.outer(hann_1d, hann_1d)  # [H, W]
+        hann_2d = hann_2d.unsqueeze(0).repeat(channels, 1, 1)  # [C, H, W]
+        return hann_2d
 
     batch_size, _, H, W = images.shape
     keep_size = patch_size if stride >= patch_size else stride
     outer_margin = (patch_size - keep_size) // 2
 
-    # Pad input
+    # Padding
     pad_h = (patch_size - H % stride) % stride
     pad_w = (patch_size - W % stride) % stride
     images = F.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
     _, _, padded_H, padded_W = images.shape
 
-    hann_window = create_hann_window(keep_size, device=images.device)
-    hann_window = hann_window.squeeze(0).repeat(num_classes, 1, 1)
+    # Hann-Fenster
+    hann_logits = create_hann_window(
+        keep_size, device=images.device, channels=num_classes
+    )
+    hann_entropy = hann_logits[0]  # [H, W] nur 1x für Entropie nötig
 
     pred_map = torch.zeros(
         (batch_size, num_classes, padded_H, padded_W), device=images.device
@@ -746,7 +753,7 @@ def sliding_window_inference_entropy_hann(
     count_map = torch.zeros_like(pred_map)
     entropy_weight = torch.zeros_like(entropy_map)
 
-    # Patch extraction
+    # Patches extrahieren
     all_patches = []
     patch_targets = []
     for b in range(batch_size):
@@ -761,57 +768,58 @@ def sliding_window_inference_entropy_hann(
     model.eval()
     with torch.no_grad():
         with torch.amp.autocast("cuda"):
-            logits = model(patch_tensor)
+            logits = model(patch_tensor)  # [N, C, H, W]
 
     softmax_probs = F.softmax(logits, dim=1)
-    entropy = -(softmax_probs * torch.log(softmax_probs + 1e-8)).sum(dim=1)
+    entropy = -(softmax_probs * torch.log(softmax_probs + 1e-8)).sum(dim=1)  # [N, H, W]
 
-    # Patch stitching
+    # Einfügen
     for i, (b, h, w) in enumerate(patch_targets):
-        logits_crop = logits[
+        log_crop = logits[
             i,
             :,
             outer_margin : outer_margin + keep_size,
             outer_margin : outer_margin + keep_size,
-        ] * hann_window.squeeze(0)
-
-        entropy_crop = entropy[
+        ]
+        ent_crop = entropy[
             i,
             outer_margin : outer_margin + keep_size,
             outer_margin : outer_margin + keep_size,
-        ] * hann_window.squeeze(0).squeeze(0)
+        ]
 
         pred_map[
             b,
             :,
             h + outer_margin : h + outer_margin + keep_size,
             w + outer_margin : w + outer_margin + keep_size,
-        ] += logits_crop
-
+        ] += (
+            log_crop * hann_logits
+        )
         count_map[
             b,
             :,
             h + outer_margin : h + outer_margin + keep_size,
             w + outer_margin : w + outer_margin + keep_size,
-        ] += hann_window
+        ] += hann_logits
 
         entropy_map[
             b,
             h + outer_margin : h + outer_margin + keep_size,
             w + outer_margin : w + outer_margin + keep_size,
-        ] += entropy_crop
-
+        ] += (
+            ent_crop * hann_entropy
+        )
         entropy_weight[
             b,
             h + outer_margin : h + outer_margin + keep_size,
             w + outer_margin : w + outer_margin + keep_size,
-        ] += hann_window.squeeze(0).squeeze(0)
+        ] += hann_entropy
 
-    # Normalize
+    # Normalisieren
     pred_map = pred_map / (count_map + 1e-6)
     entropy_map = entropy_map / (entropy_weight + 1e-6)
 
-    # Crop to original size
+    # Zuschneiden
     pred_map = pred_map[:, :, :H, :W]
     entropy_map = entropy_map[:, :H, :W]
 
