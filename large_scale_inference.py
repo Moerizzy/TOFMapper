@@ -947,7 +947,11 @@ def main():
         # )
 
         logits, entropy_map_basic = sliding_window_inference_entropy_hann(
-            model, images, num_classes=6, patch_size=1024, stride=512
+            model,
+            images,
+            num_classes=config.num_classes,
+            patch_size=args.patch_size,
+            stride=512,
         )
 
         predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
