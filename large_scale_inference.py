@@ -638,126 +638,6 @@ def run_parallel_polygonization(image_paths, max_workers=4):
     return results
 
 
-def sliding_window_inference_batched_uncertainty(
-    model, images, num_classes, patch_size=1024, keep_ratio=0.7, mc_iterations=10
-):
-    """
-    Perform batched sliding window inference and estimate uncertainty using:
-      - Entropy from a single softmax output (basic uncertainty)
-      - Entropy and standard deviation from Monte Carlo Dropout (MC) inference
-
-    Returns:
-        mean_logits: Tensor of shape (B, num_classes, H, W) — MC averaged logits
-        entropy_map_basic: Tensor of shape (B, H, W) — entropy from a single forward pass
-        entropy_map_mc: Tensor of shape (B, H, W) — entropy from MC-averaged softmax
-        std_map: Tensor of shape (B, H, W) — std across MC iterations
-    """
-    inner_size = int(patch_size * keep_ratio)
-    outer_margin = (patch_size - inner_size) // 2
-    stride = inner_size
-
-    batch_size, _, H, W = images.shape
-    pad_h = (patch_size - H % patch_size) % patch_size
-    pad_w = (patch_size - W % patch_size) % patch_size
-    images = F.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
-    _, _, padded_H, padded_W = images.shape
-
-    all_patches = []
-    patch_targets = []
-    for b in range(batch_size):
-        for h in range(0, padded_H - patch_size + 1, stride):
-            for w in range(0, padded_W - patch_size + 1, stride):
-                window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
-                all_patches.append(window)
-                patch_targets.append((b, h, w))
-
-    patch_tensor = torch.cat(all_patches, dim=0)
-    N = patch_tensor.shape[0]
-
-    # Single forward pass (basic uncertainty)
-    model.eval()
-    with torch.no_grad():
-        with torch.amp.autocast("cuda"):
-            single_logits = model(patch_tensor)
-
-    single_softmax = F.softmax(single_logits, dim=1)
-    entropy_basic = -(single_softmax * torch.log(single_softmax + 1e-8)).sum(
-        dim=1
-    )  # [N, H, W]
-
-    # Monte Carlo dropout
-    mc_logits = torch.zeros(
-        (mc_iterations, N, num_classes, patch_size, patch_size), device=images.device
-    )
-    model.train()
-    with torch.no_grad():
-        for i in range(mc_iterations):
-            with torch.amp.autocast("cuda"):
-                mc_logits[i] = model(patch_tensor)
-
-    model.eval()
-    mean_logits = mc_logits.mean(dim=0)
-    softmax_mc = F.softmax(mean_logits, dim=1)
-    entropy_mc = -(softmax_mc * torch.log(softmax_mc + 1e-8)).sum(dim=1)
-    std_map = mc_logits.std(dim=0).mean(dim=1)
-
-    pred_map = torch.zeros(
-        (batch_size, num_classes, padded_H, padded_W), device=images.device
-    )
-    entropy_map_basic = torch.zeros(
-        (batch_size, padded_H, padded_W), device=images.device
-    )
-    entropy_map_mc = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
-    std_map_full = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
-
-    for i, (b, h, w) in enumerate(patch_targets):
-        pred_map[
-            b,
-            :,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = mean_logits[
-            i,
-            :,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-        entropy_map_basic[
-            b,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = entropy_basic[
-            i,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-        entropy_map_mc[
-            b,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = entropy_mc[
-            i,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-        std_map_full[
-            b,
-            h + outer_margin : h + outer_margin + inner_size,
-            w + outer_margin : w + outer_margin + inner_size,
-        ] = std_map[
-            i,
-            outer_margin : outer_margin + inner_size,
-            outer_margin : outer_margin + inner_size,
-        ]
-
-    return (
-        pred_map[:, :, :H, :W],
-        entropy_map_basic[:, :H, :W],
-        entropy_map_mc[:, :H, :W],
-        std_map_full[:, :H, :W],
-    )
-
-
 def sliding_window_inference_batched_entropy(
     model, images, num_classes, patch_size=1024, keep_ratio=0.7
 ):
@@ -868,7 +748,7 @@ def aggregate_uncertainty_by_filename(
     # Mask whole tile (no geometry match needed)
     stats = {}
     mask = np.ones_like(entropy_map, dtype=bool)
-    values = entropy_map[~mask | ~entropy_map.mask]
+    values = entropy_map.compressed()
 
     if values.size == 0:
         stats[f"{prefix}_median"] = np.nan
@@ -1003,18 +883,18 @@ def main():
 
         run_parallel_polygonization(written_tif_paths)
 
-        gpkg_path = "data/utm_grid/Sachen_Grid_ETRS89-UTM32_1km.gpkg"
-        tile_grid = gpd.read_file(gpkg_path)
+    gpkg_path = "data/utm_grid/Sachen_Grid_ETRS89-UTM32_1km.gpkg"
+    tile_grid = gpd.read_file(gpkg_path)
 
-        # Convert string path to Path object
-        entropy_subfolder = Path(os.path.join(args.output_path, "entropy_maps"))
+    # Convert string path to Path object
+    entropy_subfolder = Path(os.path.join(args.output_path, "entropy_maps"))
 
-        for raster_path in entropy_subfolder.glob("*.tif"):
-            tile_grid = aggregate_uncertainty_by_filename(
-                raster_path, tile_grid, threshold=600, prefix="entropy"
-            )
+    for raster_path in entropy_subfolder.glob("*.tif"):
+        tile_grid = aggregate_uncertainty_by_filename(
+            raster_path, tile_grid, threshold=600, prefix="entropy"
+        )
 
-        tile_grid.to_file("results/grid_with_entropy.gpkg", driver="GPKG")
+    tile_grid.to_file("results/grid_with_entropy.gpkg", driver="GPKG")
 
 
 if __name__ == "__main__":
