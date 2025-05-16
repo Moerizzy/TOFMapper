@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
 from pathlib import Path
+import re
 
 # Scientific and numerical libraries
 import numpy as np
@@ -823,41 +824,78 @@ def sliding_window_inference_batched_entropy(
     return pred_map[:, :, :H, :W], entropy_map[:, :H, :W]
 
 
-def aggregate_uncertainty_to_existing_grid(
-    entropy_map, transform, tile_grid, threshold=0.5
+def extract_coords_from_filename(filename):
+    """
+    Extract x_sw and y_sw from filename like dop20_rgb_32709_5605_1.tiff
+    """
+    match = re.search(r"dop20_rgb_32(\d{3})_(\d{4})_", filename)
+    if match:
+        x_sw = int(match.group(1)) * 1000
+        y_sw = int(match.group(2)) * 1000
+        return x_sw, y_sw
+    else:
+        return None, None
+
+
+def aggregate_uncertainty_by_filename(
+    raster_path, tile_grid, threshold=0.5, prefix="entropy"
 ):
     """
-    Aggregates entropy-based uncertainty into an existing grid of polygons.
+    Aggregates uncertainty from a raster and adds stats to the matching tile based on filename coordinates.
 
     Args:
-        entropy_map (np.ndarray): 2D entropy array (H, W)
-        transform (Affine): rasterio transform for georeferencing
-        tile_grid (GeoDataFrame): Polygon grid (e.g., UTM tiles)
-        threshold (float): threshold for high-uncertainty pixel counting
+        raster_path (Path or str): Path to the raster file
+        tile_grid (GeoDataFrame): Grid with x_sw, y_sw columns
+        threshold (float): Threshold for high uncertainty
+        prefix (str): Prefix for new columns
 
     Returns:
-        GeoDataFrame: tile grid with new columns for median entropy and high entropy ratio
+        GeoDataFrame: Updated tile_grid with new columns
     """
-    results = []
-    for idx, tile in tile_grid.iterrows():
-        mask = rasterio.features.geometry_mask(
-            [tile.geometry],
-            out_shape=entropy_map.shape,
-            transform=transform,
-            invert=True,
-        )
-        values = entropy_map[mask]
-        if len(values) == 0:
-            median = np.nan
-            frac_high = np.nan
-        else:
-            median = float(np.median(values))
-            frac_high = float((values > threshold).sum() / len(values))
-        results.append((median, frac_high))
+    from pathlib import Path
 
+    raster_path = Path(raster_path)
+    x_sw, y_sw = extract_coords_from_filename(raster_path.name)
+
+    if x_sw is None:
+        raise ValueError(f"Filename {raster_path.name} could not be parsed.")
+
+    # Read raster
+    with rasterio.open(raster_path) as src:
+        entropy_map = src.read(1, masked=True)
+        transform = src.transform
+
+    # Mask whole tile (no geometry match needed)
+    stats = {}
+    mask = np.ones_like(entropy_map, dtype=bool)
+    values = entropy_map[~mask | ~entropy_map.mask]
+
+    if values.size == 0:
+        stats[f"{prefix}_median"] = np.nan
+        stats[f"{prefix}_mean"] = np.nan
+        stats[f"{prefix}_std"] = np.nan
+        stats[f"{prefix}_min"] = np.nan
+        stats[f"{prefix}_max"] = np.nan
+        stats[f"{prefix}_high_frac"] = np.nan
+    else:
+        stats[f"{prefix}_median"] = float(np.median(values))
+        stats[f"{prefix}_mean"] = float(np.mean(values))
+        stats[f"{prefix}_std"] = float(np.std(values))
+        stats[f"{prefix}_min"] = float(np.min(values))
+        stats[f"{prefix}_max"] = float(np.max(values))
+        stats[f"{prefix}_high_frac"] = float((values > threshold).sum() / len(values))
+
+    # Update tile
     tile_grid = tile_grid.copy()
-    tile_grid["median_entropy"] = [r[0] for r in results]
-    tile_grid["high_entropy_frac"] = [r[1] for r in results]
+    idx = tile_grid[(tile_grid["x_sw"] == x_sw) & (tile_grid["y_sw"] == y_sw)].index
+    if not idx.empty:
+        for key, val in stats.items():
+            if key not in tile_grid.columns:
+                tile_grid[key] = np.nan
+            tile_grid.loc[idx, key] = val
+    else:
+        print(f"Warning: No match in grid for {raster_path.name}")
+
     return tile_grid
 
 
@@ -923,8 +961,15 @@ def main():
             input_path = input_paths[i]
             base_name = os.path.splitext(image_names[i])[0]
             output_pred_file = os.path.join(args.output_path, f"{base_name}.tif")
+            # Define the entropy subfolder path
+            entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
+
+            # Create the folder if it doesn't exist
+            os.makedirs(entropy_subfolder, exist_ok=True)
+
+            # Define the output file path within the entropy subfolder
             output_entropy_basic_file = os.path.join(
-                args.output_path, f"{base_name}_entropy_basic.tif"
+                entropy_subfolder, f"{base_name}_entropy_basic.tif"
             )
 
             written_tif_paths.append(output_pred_file)
@@ -958,17 +1003,18 @@ def main():
                 profile.update(dtype=rasterio.float32)
                 with rasterio.open(output_entropy_basic_file, "w", **profile) as dst:
                     dst.write(entropy_basic, 1)
-                    entropy_arr = src.read(1)
-                    transform = src.transform
-
-            entropy_grid_gdf = aggregate_uncertainty_to_existing_grid(
-                entropy_map=entropy_arr,
-                transform=transform,
-                tile_grid=utm_grid,
-                threshold=0.5,
-            )
 
         run_parallel_polygonization(written_tif_paths)
+
+        gpkg_path = "data/utm_grid/DE_Grid_ETRS89-UTM32_1km_uncertainty_stats.gpkg"
+        tile_grid = gpd.read_file(gpkg_path)
+
+        for raster_path in entropy_subfolder.glob("*.tif"):
+            tile_grid = aggregate_uncertainty_by_filename(
+                raster_path, tile_grid, threshold=0.6, prefix="entropy"
+            )
+
+        tile_grid.to_file("grid_with_entropy.gpkg", driver="GPKG")
 
 
 if __name__ == "__main__":
