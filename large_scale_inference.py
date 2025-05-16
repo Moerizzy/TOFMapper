@@ -767,15 +767,12 @@ def sliding_window_inference_entropy_hann(
 
     # Patch stitching
     for i, (b, h, w) in enumerate(patch_targets):
-        logits_crop = (
-            logits[
-                i,
-                :,
-                outer_margin : outer_margin + keep_size,
-                outer_margin : outer_margin + keep_size,
-            ]
-            * hann_window
-        )
+        logits_crop = logits[
+            i,
+            :,
+            outer_margin : outer_margin + keep_size,
+            outer_margin : outer_margin + keep_size,
+        ] * hann_window.squeeze(0)
 
         entropy_crop = entropy[
             i,
