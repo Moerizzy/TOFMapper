@@ -704,6 +704,122 @@ def sliding_window_inference_batched_entropy(
     return pred_map[:, :, :H, :W], entropy_map[:, :H, :W]
 
 
+def sliding_window_inference_entropy_hann(
+    model, images, num_classes, patch_size=1024, stride=768
+):
+    """
+    Batched sliding-window inference with Hann-weighted logits and entropy map.
+
+    Args:
+        model (nn.Module): segmentation model.
+        images (Tensor): (B, C, H, W)
+        num_classes (int): number of output classes
+        patch_size (int): size of square patch (default: 1024)
+        stride (int): step between patches (controls overlap)
+    Returns:
+        pred_map (Tensor): (B, num_classes, H, W)
+        entropy_map (Tensor): (B, H, W)
+    """
+    import torch.nn.functional as F
+
+    def create_hann_window(size: int, device):
+        hann_1d = torch.hann_window(size, periodic=False, device=device)
+        return torch.outer(hann_1d, hann_1d).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+
+    batch_size, _, H, W = images.shape
+    keep_size = patch_size if stride >= patch_size else stride
+    outer_margin = (patch_size - keep_size) // 2
+
+    # Pad input
+    pad_h = (patch_size - H % stride) % stride
+    pad_w = (patch_size - W % stride) % stride
+    images = F.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
+    _, _, padded_H, padded_W = images.shape
+
+    hann_window = create_hann_window(keep_size, device=images.device)
+
+    pred_map = torch.zeros(
+        (batch_size, num_classes, padded_H, padded_W), device=images.device
+    )
+    entropy_map = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
+    count_map = torch.zeros_like(pred_map)
+    entropy_weight = torch.zeros_like(entropy_map)
+
+    # Patch extraction
+    all_patches = []
+    patch_targets = []
+    for b in range(batch_size):
+        for h in range(0, padded_H - patch_size + 1, stride):
+            for w in range(0, padded_W - patch_size + 1, stride):
+                patch = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
+                all_patches.append(patch)
+                patch_targets.append((b, h, w))
+
+    patch_tensor = torch.cat(all_patches, dim=0)
+
+    model.eval()
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            logits = model(patch_tensor)
+
+    softmax_probs = F.softmax(logits, dim=1)
+    entropy = -(softmax_probs * torch.log(softmax_probs + 1e-8)).sum(dim=1)
+
+    # Patch stitching
+    for i, (b, h, w) in enumerate(patch_targets):
+        logits_crop = (
+            logits[
+                i,
+                :,
+                outer_margin : outer_margin + keep_size,
+                outer_margin : outer_margin + keep_size,
+            ]
+            * hann_window
+        )
+
+        entropy_crop = entropy[
+            i,
+            outer_margin : outer_margin + keep_size,
+            outer_margin : outer_margin + keep_size,
+        ] * hann_window.squeeze(0).squeeze(0)
+
+        pred_map[
+            b,
+            :,
+            h + outer_margin : h + outer_margin + keep_size,
+            w + outer_margin : w + outer_margin + keep_size,
+        ] += logits_crop
+
+        count_map[
+            b,
+            :,
+            h + outer_margin : h + outer_margin + keep_size,
+            w + outer_margin : w + outer_margin + keep_size,
+        ] += hann_window
+
+        entropy_map[
+            b,
+            h + outer_margin : h + outer_margin + keep_size,
+            w + outer_margin : w + outer_margin + keep_size,
+        ] += entropy_crop
+
+        entropy_weight[
+            b,
+            h + outer_margin : h + outer_margin + keep_size,
+            w + outer_margin : w + outer_margin + keep_size,
+        ] += hann_window.squeeze(0).squeeze(0)
+
+    # Normalize
+    pred_map = pred_map / (count_map + 1e-6)
+    entropy_map = entropy_map / (entropy_weight + 1e-6)
+
+    # Crop to original size
+    pred_map = pred_map[:, :, :H, :W]
+    entropy_map = entropy_map[:, :H, :W]
+
+    return pred_map, entropy_map
+
+
 def extract_coords_from_filename(filename):
     """
     Extract x_sw and y_sw from filename like dop20_rgb_32709_5605_1.tiff
@@ -821,13 +937,17 @@ def main():
         image_names = batch["image_name"]
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
-        # Run MC Dropout inference with basic softmax entropy, MC entropy, and MC std
-        logits, entropy_map_basic = sliding_window_inference_batched_entropy(
-            model,
-            images,
-            num_classes=config.num_classes,
-            patch_size=args.patch_size,
-            keep_ratio=args.keep_ratio,
+        # # Run MC Dropout inference with basic softmax entropy, MC entropy, and MC std
+        # logits, entropy_map_basic = sliding_window_inference_batched_entropy(
+        #     model,
+        #     images,
+        #     num_classes=config.num_classes,
+        #     patch_size=args.patch_size,
+        #     keep_ratio=args.keep_ratio,
+        # )
+
+        logits, entropy_map_basic = sliding_window_inference_entropy_hann(
+            model, images, num_classes=6, patch_size=1024, stride=512
         )
 
         predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
