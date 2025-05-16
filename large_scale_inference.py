@@ -757,6 +757,110 @@ def sliding_window_inference_batched_uncertainty(
     )
 
 
+def sliding_window_inference_batched_entropy(
+    model, images, num_classes, patch_size=1024, keep_ratio=0.7
+):
+    """
+    Batched sliding-window inference with softmax entropy computation (no MC dropout).
+    Returns prediction logits and entropy map.
+    """
+    inner_size = int(patch_size * keep_ratio)
+    outer_margin = (patch_size - inner_size) // 2
+    stride = inner_size
+
+    batch_size, _, H, W = images.shape
+    pad_h = (patch_size - H % patch_size) % patch_size
+    pad_w = (patch_size - W % patch_size) % patch_size
+    images = F.pad(images, (0, pad_w, 0, pad_h), mode="reflect")
+    _, _, padded_H, padded_W = images.shape
+
+    all_patches = []
+    patch_targets = []
+    for b in range(batch_size):
+        for h in range(0, padded_H - patch_size + 1, stride):
+            for w in range(0, padded_W - patch_size + 1, stride):
+                window = images[b : b + 1, :, h : h + patch_size, w : w + patch_size]
+                all_patches.append(window)
+                patch_targets.append((b, h, w))
+
+    patch_tensor = torch.cat(all_patches, dim=0)
+
+    model.eval()
+    with torch.no_grad():
+        with torch.amp.autocast("cuda"):
+            logits = model(patch_tensor)
+
+    softmax_probs = F.softmax(logits, dim=1)
+    entropy = -(softmax_probs * torch.log(softmax_probs + 1e-8)).sum(dim=1)
+
+    pred_map = torch.zeros(
+        (batch_size, num_classes, padded_H, padded_W), device=images.device
+    )
+    entropy_map = torch.zeros((batch_size, padded_H, padded_W), device=images.device)
+
+    for i, (b, h, w) in enumerate(patch_targets):
+        pred_map[
+            b,
+            :,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = logits[
+            i,
+            :,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+        entropy_map[
+            b,
+            h + outer_margin : h + outer_margin + inner_size,
+            w + outer_margin : w + outer_margin + inner_size,
+        ] = entropy[
+            i,
+            outer_margin : outer_margin + inner_size,
+            outer_margin : outer_margin + inner_size,
+        ]
+
+    return pred_map[:, :, :H, :W], entropy_map[:, :H, :W]
+
+
+def aggregate_uncertainty_to_existing_grid(
+    entropy_map, transform, tile_grid, threshold=0.5
+):
+    """
+    Aggregates entropy-based uncertainty into an existing grid of polygons.
+
+    Args:
+        entropy_map (np.ndarray): 2D entropy array (H, W)
+        transform (Affine): rasterio transform for georeferencing
+        tile_grid (GeoDataFrame): Polygon grid (e.g., UTM tiles)
+        threshold (float): threshold for high-uncertainty pixel counting
+
+    Returns:
+        GeoDataFrame: tile grid with new columns for median entropy and high entropy ratio
+    """
+    results = []
+    for idx, tile in tile_grid.iterrows():
+        mask = rasterio.features.geometry_mask(
+            [tile.geometry],
+            out_shape=entropy_map.shape,
+            transform=transform,
+            invert=True,
+        )
+        values = entropy_map[mask]
+        if len(values) == 0:
+            median = np.nan
+            frac_high = np.nan
+        else:
+            median = float(np.median(values))
+            frac_high = float((values > threshold).sum() / len(values))
+        results.append((median, frac_high))
+
+    tile_grid = tile_grid.copy()
+    tile_grid["median_entropy"] = [r[0] for r in results]
+    tile_grid["high_entropy_frac"] = [r[1] for r in results]
+    return tile_grid
+
+
 def main():
     """
     Main execution function for large-scale raster segmentation inference.
@@ -800,26 +904,21 @@ def main():
         input_paths = [os.path.join(args.image_path, name) for name in image_names]
 
         # Run MC Dropout inference with basic softmax entropy, MC entropy, and MC std
-        mean_logits, entropy_map_basic, entropy_map_mc, std_map = (
-            sliding_window_inference_batched_uncertainty(
-                model,
-                images,
-                num_classes=config.num_classes,
-                patch_size=args.patch_size,
-                keep_ratio=args.keep_ratio,
-                mc_iterations=10,
-            )
+        logits, entropy_map_basic = sliding_window_inference_batched_entropy(
+            model,
+            images,
+            num_classes=config.num_classes,
+            patch_size=args.patch_size,
+            keep_ratio=args.keep_ratio,
         )
 
-        predictions = nn.Softmax(dim=1)(mean_logits).argmax(dim=1)
+        predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
 
         written_tif_paths = []
 
         for i in range(len(images)):
             prediction = predictions[i].cpu().numpy().astype(np.uint8)
             entropy_basic = entropy_map_basic[i].cpu().numpy().astype(np.float32)
-            entropy_mc = entropy_map_mc[i].cpu().numpy().astype(np.float32)
-            std = std_map[i].cpu().numpy().astype(np.float32)
 
             input_path = input_paths[i]
             base_name = os.path.splitext(image_names[i])[0]
@@ -827,12 +926,12 @@ def main():
             output_entropy_basic_file = os.path.join(
                 args.output_path, f"{base_name}_entropy_basic.tif"
             )
-            output_entropy_mc_file = os.path.join(
-                args.output_path, f"{base_name}_entropy_mc.tif"
-            )
-            output_std_file = os.path.join(args.output_path, f"{base_name}_std.tif")
 
             written_tif_paths.append(output_pred_file)
+
+            utm_grid = gpd.read_file(
+                "data/utm_grid/DE_Grid_ETRS89-UTM32_1km.gpkg"
+            )  # Must be in EPSG:25832 or reprojected
 
             with rasterio.open(input_path) as src:
                 height, width = src.height, src.width
@@ -848,29 +947,28 @@ def main():
 
                 prediction = center_crop(prediction)
                 entropy_basic = center_crop(entropy_basic)
-                entropy_mc = center_crop(entropy_mc)
-                std = center_crop(std)
 
                 profile = src.profile
                 profile.update(
                     dtype=rasterio.uint8, count=1, compress="lzw", photometric=None
                 )
-
                 with rasterio.open(output_pred_file, "w", **profile) as dst:
                     dst.write(prediction, 1)
 
                 profile.update(dtype=rasterio.float32)
                 with rasterio.open(output_entropy_basic_file, "w", **profile) as dst:
                     dst.write(entropy_basic, 1)
+                    entropy_arr = src.read(1)
+                    transform = src.transform
 
-                with rasterio.open(output_entropy_mc_file, "w", **profile) as dst:
-                    dst.write(entropy_mc, 1)
+            entropy_grid_gdf = aggregate_uncertainty_to_existing_grid(
+                entropy_map=entropy_arr,
+                transform=transform,
+                tile_grid=utm_grid,
+                threshold=0.5,
+            )
 
-                with rasterio.open(output_std_file, "w", **profile) as dst:
-                    dst.write(std, 1)
-
-            # Postprocess and polygonize results in parallel
-            run_parallel_polygonization(written_tif_paths)
+        run_parallel_polygonization(written_tif_paths)
 
 
 if __name__ == "__main__":
