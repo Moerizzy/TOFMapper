@@ -1006,6 +1006,9 @@ def main():
         gpkg_path = "data/utm_grid/Sachen_Grid_ETRS89-UTM32_1km.gpkg"
         tile_grid = gpd.read_file(gpkg_path)
 
+        # Convert string path to Path object
+        entropy_subfolder = Path(os.path.join(args.output_path, "entropy_maps"))
+
         for raster_path in entropy_subfolder.glob("*.tif"):
             tile_grid = aggregate_uncertainty_by_filename(
                 raster_path, tile_grid, threshold=600, prefix="entropy"
