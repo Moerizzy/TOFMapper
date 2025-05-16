@@ -974,10 +974,6 @@ def main():
 
             written_tif_paths.append(output_pred_file)
 
-            utm_grid = gpd.read_file(
-                "data/utm_grid/DE_Grid_ETRS89-UTM32_1km.gpkg"
-            )  # Must be in EPSG:25832 or reprojected
-
             with rasterio.open(input_path) as src:
                 height, width = src.height, src.width
 
@@ -992,6 +988,7 @@ def main():
 
                 prediction = center_crop(prediction)
                 entropy_basic = center_crop(entropy_basic)
+                entropy_basic = (center_crop(entropy_basic) * 1000).astype(np.uint16)
 
                 profile = src.profile
                 profile.update(
@@ -1000,21 +997,21 @@ def main():
                 with rasterio.open(output_pred_file, "w", **profile) as dst:
                     dst.write(prediction, 1)
 
-                profile.update(dtype=rasterio.float32)
+                profile.update(dtype=rasterio.uint16)
                 with rasterio.open(output_entropy_basic_file, "w", **profile) as dst:
                     dst.write(entropy_basic, 1)
 
         run_parallel_polygonization(written_tif_paths)
 
-        gpkg_path = "data/utm_grid/DE_Grid_ETRS89-UTM32_1km_uncertainty_stats.gpkg"
+        gpkg_path = "data/utm_grid/Sachen_Grid_ETRS89-UTM32_1km.gpkg"
         tile_grid = gpd.read_file(gpkg_path)
 
         for raster_path in entropy_subfolder.glob("*.tif"):
             tile_grid = aggregate_uncertainty_by_filename(
-                raster_path, tile_grid, threshold=0.6, prefix="entropy"
+                raster_path, tile_grid, threshold=600, prefix="entropy"
             )
 
-        tile_grid.to_file("grid_with_entropy.gpkg", driver="GPKG")
+        tile_grid.to_file("results/grid_with_entropy.gpkg", driver="GPKG")
 
 
 if __name__ == "__main__":
