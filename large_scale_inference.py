@@ -401,7 +401,7 @@ def process_image(image_path):
     Returns:
         str: Path to the output `.gpkg` file.
     """
-    output_gpkg = image_path.replace(".tif", ".gpkg")
+    output_gpkg = image_path.replace(".tiff", ".gpkg")
 
     polygonize_raster_to_geopackage(
         tif_path=image_path,
