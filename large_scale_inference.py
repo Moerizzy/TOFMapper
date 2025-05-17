@@ -143,7 +143,13 @@ download_done = threading.Event()
 processed = set()
 inference_counter = 0
 inference_lock = threading.Lock()
-download_lock = threading.Lock()  # ✅ DAS FEHLT BEI DIR
+
+
+class DownloadState:
+    def __init__(self, total):
+        self.counter = 0
+        self.lock = threading.Lock()
+        self.total = total
 
 
 class InferenceDataset(Dataset):
@@ -774,9 +780,7 @@ def inference_watcher():
         time.sleep(2)
 
 
-def download_partition(tile_subset, args, wms, margin_m, downloader, image_path):
-    global download_counter, download_lock
-
+def download_partition(tile_subset, args, wms, margin_m, downloader, image_path, state):
     for _, row in tile_subset.iterrows():
         try:
             utm_bounding_box = row.geometry
@@ -799,11 +803,9 @@ def download_partition(tile_subset, args, wms, margin_m, downloader, image_path)
                 driver="GTiff",
             )
 
-            with download_lock:
-                download_counter += 1
-                print(
-                    f"[Download] {download_counter} / {args.tile_count} tiles completed"
-                )
+            with state.lock:
+                state.counter += 1
+                print(f"[Download] {state.counter} / {state.total} tiles completed")
 
         except Exception as e:
             print(f"[Download] Error on tile {row.name}: {e}")
@@ -819,7 +821,6 @@ def download_wrapper():
     tile_grid = gpd.read_file(args.utm_grid)
     args.tile_count = len(tile_grid)
 
-    # Aufteilen in 3 gleich große GeoDataFrames
     tile_subsets = np.array_split(tile_grid, 3)
 
     wms = ExtendedWebMapService(
@@ -834,11 +835,14 @@ def download_wrapper():
     margin_m = (args.patch_size * wms.resolution) // 2
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
+    # Gemeinsamer Zustand
+    state = DownloadState(total=args.tile_count)
+
     threads = []
     for i, subset in enumerate(tile_subsets):
         t = threading.Thread(
             target=download_partition,
-            args=(subset, args, wms, margin_m, downloader, image_path),
+            args=(subset, args, wms, margin_m, downloader, image_path, state),
             name=f"Downloader-{i+1}",
         )
         threads.append(t)
