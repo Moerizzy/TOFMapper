@@ -608,74 +608,15 @@ def aggregate_uncertainty_by_filename(
 
 download_done = threading.Event()
 processed = set()
-
-
-def download():
-    """
-    Downloads and processes a single image by running inference and polygonization.
-
-    This function:
-    - Downloads the image from a given path
-    - Runs inference using the trained model
-    - Polygonizes the output raster and saves it as a GeoPackage
-
-    Args:
-        image_path (str): Path to the input image file.
-
-    Returns:
-        str: Path to the output GeoPackage file.
-    """
-    args = get_args()
-    seed_everything(42)
-
-    utm_grid = args.utm_grid
-    image_path = Path(args.image_path)
-
-    os.makedirs(image_path, exist_ok=True)
-
-    # Load UTM grid
-    tile_grid = gpd.read_file(utm_grid)
-
-    wms = ExtendedWebMapService(
-        url="https://geodienste.sachsen.de/wms_geosn_dop_2018_2020/guest",
-        version="1.3.0",
-        resolution=0.2,
-        layer_name="dop_2018_2020_rgb",
-        crs="EPSG:25832",
-        format="image/tiff",
-    )
-
-    margin_m = (args.patch_size * wms.resolution) // 2
-
-    downloader = ImageDownloader(wms, grid_spacing=1000)  # z. B. 1000 Meter Kacheln
-
-    for _, row in tile_grid.iterrows():
-
-        utm_bounding_box = row.geometry
-
-        ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
-        uly = int(round(utm_bounding_box.bounds[1] / 1000) * 1000)
-        prefix = f"{ulx}_{uly}"
-        path = image_path / f"image_32_{prefix}.tiff"
-
-        minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
-        width_px = int((maxx - minx) / wms.resolution)
-        height_px = int((maxy - miny) / wms.resolution)
-        polygon = box(minx, miny, maxx, maxy)
-
-        img = downloader.download_single_image(
-            img_path=path,
-            bounding_box=polygon,
-            wms=wms,
-            width_px=width_px,
-            height_px=height_px,
-            driver="GTiff",
-        )
+inference_counter = 0
+inference_lock = threading.Lock()
 
 
 def inference_watcher():
     args = get_args()
     seed_everything(42)
+    tile_grid = gpd.read_file(args.utm_grid)
+    args.tile_count = len(tile_grid)
 
     config = py2cfg(args.config_path)
     model = Supervision_Train.load_from_checkpoint(
@@ -799,6 +740,12 @@ def inference_watcher():
 
                     written_tif_paths.append(output_pred_file)
                     processed.add(image_names[i])
+                    with inference_lock:
+                        global inference_counter
+                        inference_counter += 1
+                        print(
+                            f"[Inference] {inference_counter} / {args.tile_count} tiles processed"
+                        )
 
                 run_parallel_polygonization(written_tif_paths)
 
@@ -824,8 +771,78 @@ def inference_watcher():
         time.sleep(2)
 
 
+def download_partition(tile_rows, args, wms, margin_m, downloader, image_path):
+    global download_counter
+
+    for _, row in tile_rows:
+        try:
+            utm_bounding_box = row.geometry
+            ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
+            uly = int(round(utm_bounding_box.bounds[1] / 1000) * 1000)
+            prefix = f"{ulx}_{uly}"
+            path = image_path / f"image_32_{prefix}.tiff"
+
+            minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
+            width_px = int((maxx - minx) / wms.resolution)
+            height_px = int((maxy - miny) / wms.resolution)
+            polygon = box(minx, miny, maxx, maxy)
+
+            downloader.download_single_image(
+                img_path=path,
+                bounding_box=polygon,
+                wms=wms,
+                width_px=width_px,
+                height_px=height_px,
+                driver="GTiff",
+            )
+
+            with download_lock:
+                download_counter += 1
+                print(
+                    f"[Download] {download_counter} / {args.tile_count} tiles completed"
+                )
+
+        except Exception as e:
+            print(f"[Download] Error on tile {row}: {e}")
+
+
 def download_wrapper():
-    download()
+    args = get_args()
+    seed_everything(42)
+
+    image_path = Path(args.image_path)
+    os.makedirs(image_path, exist_ok=True)
+
+    tile_grid = gpd.read_file(args.utm_grid)
+    args.tile_count = len(tile_grid)
+    tile_subsets = np.array_split(list(tile_grid.iterrows()), 3)
+
+    wms = ExtendedWebMapService(
+        url="https://geodienste.sachsen.de/wms_geosn_dop_2018_2020/guest",
+        version="1.3.0",
+        resolution=0.2,
+        layer_name="dop_2018_2020_rgb",
+        crs="EPSG:25832",
+        format="image/tiff",
+    )
+
+    margin_m = (args.patch_size * wms.resolution) // 2
+    downloader = ImageDownloader(wms, grid_spacing=1000)
+
+    threads = []
+    for i, subset in enumerate(tile_subsets):
+        t = threading.Thread(
+            target=download_partition,
+            args=(subset, args, wms, margin_m, downloader, image_path),
+            name=f"Downloader-{i+1}",
+        )
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join()
+
+    print("[Download] All tiles downloaded.")
     download_done.set()
 
 
