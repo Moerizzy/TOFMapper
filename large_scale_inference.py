@@ -380,10 +380,6 @@ def polygonize_raster_to_geopackage(
     result = result[result["area"] >= min_area].copy()
     result.to_file(output_gpkg, driver="GPKG")
 
-    # --- Step 6: Clean up temporary files ---
-    if os.path.exists(tif_path):
-        os.remove(tif_path)
-
 
 def process_image(image_path):
     """
@@ -457,9 +453,9 @@ def sliding_window_inference_entropy_hann(model, images, patch_size=1024, stride
 
     def create_hann_window(size, device):
         hann_1d = torch.hann_window(size, periodic=False, device=device)
-        flatter_1d = torch.sqrt(hann_1d)
-        window = torch.outer(flatter_1d, flatter_1d)
-        return window.unsqueeze(0).unsqueeze(0)
+        hann_2d = torch.outer(hann_1d, hann_1d)
+        softened = hann_2d**1.5  # flacherer Verlauf zum Rand
+        return softened.unsqueeze(0).unsqueeze(0)  # shape (1, 1, H, W)
 
     B, C, H, W = images.shape
     device = images.device
@@ -801,6 +797,14 @@ def inference_watcher():
                     processed.add(image_names[i])
 
                 run_parallel_polygonization(written_tif_paths)
+
+                # --- Delete all processed TIFF files ---
+                for tif_path in written_tif_paths:
+                    try:
+                        os.remove(tif_path)
+                        print(f"[Cleanup] Deleted {tif_path}")
+                    except Exception as e:
+                        print(f"[Cleanup] Failed to delete {tif_path}: {e}")
 
         elif download_done.is_set():
             print("[Inference] No more new files. Exiting.")
