@@ -807,6 +807,13 @@ def inference_watcher():
                     try:
                         os.remove(tif_path)
                         print(f"[Cleanup] Deleted {tif_path}")
+                        # TIFF im image_dir entfernen
+                        # TIFF im image_dir entfernen
+                        base_name = Path(tif_path).stem  # z. B. image_32_734000_5563000
+                        original_input = Path(args.image_path) / f"{base_name}.tiff"
+                        if original_input.exists():
+                            os.remove(original_input)
+                            print(f"[Cleanup] Deleted input: {original_input}")
                     except Exception as e:
                         print(f"[Cleanup] Failed to delete {tif_path}: {e}")
 
