@@ -139,6 +139,11 @@ import cv2
 import rasterio
 from torch.utils.data import Dataset
 
+download_done = threading.Event()
+processed = set()
+inference_counter = 0
+inference_lock = threading.Lock()
+
 
 class InferenceDataset(Dataset):
     """
@@ -606,10 +611,7 @@ def aggregate_uncertainty_by_filename(
     return tile_grid
 
 
-download_done = threading.Event()
-processed = set()
-inference_counter = 0
-inference_lock = threading.Lock()
+# Globale Synchronisation
 
 
 def inference_watcher():
@@ -803,7 +805,7 @@ def download_partition(tile_subset, args, wms, margin_m, downloader, image_path)
                 )
 
         except Exception as e:
-            print(f"[Download] Error on tile {row}: {e}")
+            print(f"[Download] Error on tile {row.name}: {e}")
 
 
 def download_wrapper():
@@ -815,6 +817,8 @@ def download_wrapper():
 
     tile_grid = gpd.read_file(args.utm_grid)
     args.tile_count = len(tile_grid)
+
+    # Aufteilen in 3 gleich große GeoDataFrames
     tile_subsets = np.array_split(tile_grid, 3)
 
     wms = ExtendedWebMapService(
