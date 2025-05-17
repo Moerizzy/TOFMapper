@@ -771,10 +771,10 @@ def inference_watcher():
         time.sleep(2)
 
 
-def download_partition(tile_rows, args, wms, margin_m, downloader, image_path):
+def download_partition(tile_subset, args, wms, margin_m, downloader, image_path):
     global download_counter
 
-    for _, row in tile_rows:
+    for _, row in tile_subset.iterrows():
         try:
             utm_bounding_box = row.geometry
             ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
@@ -815,7 +815,7 @@ def download_wrapper():
 
     tile_grid = gpd.read_file(args.utm_grid)
     args.tile_count = len(tile_grid)
-    tile_subsets = np.array_split(list(tile_grid.iterrows()), 3)
+    tile_subsets = np.array_split(tile_grid, 3)
 
     wms = ExtendedWebMapService(
         url="https://geodienste.sachsen.de/wms_geosn_dop_2018_2020/guest",
