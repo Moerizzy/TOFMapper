@@ -143,6 +143,7 @@ download_done = threading.Event()
 processed = set()
 inference_counter = 0
 inference_lock = threading.Lock()
+download_lock = threading.Lock()  # ✅ DAS FEHLT BEI DIR
 
 
 class InferenceDataset(Dataset):
@@ -774,7 +775,7 @@ def inference_watcher():
 
 
 def download_partition(tile_subset, args, wms, margin_m, downloader, image_path):
-    global download_counter
+    global download_counter, download_lock
 
     for _, row in tile_subset.iterrows():
         try:
