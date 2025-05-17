@@ -652,8 +652,8 @@ def download():
 
         utm_bounding_box = row.geometry
 
-        ulx = int(utm_bounding_box.bounds[0])
-        uly = int(utm_bounding_box.bounds[1])
+        ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
+        uly = int(round(utm_bounding_box.bounds[1] / 1000) * 1000)
         prefix = f"{ulx}_{uly}"
         path = image_path / f"image_32_{prefix}.tiff"
 
@@ -758,17 +758,39 @@ def inference_watcher():
                             np.uint16
                         )
 
-                        profile = src.profile
-                        profile.update(
-                            dtype=rasterio.uint8,
-                            count=1,
-                            compress="lzw",
-                            photometric=None,
-                        )
+                        # Extract UTM coordinates from filename
+                        match = re.search(r"(\d{6})_(\d{7})", base_name)
+                        if not match:
+                            raise ValueError(
+                                f"Filename {base_name} does not contain valid UTM coords."
+                            )
+
+                        ulx, uly = map(int, match.groups())
+                        lrx, lry = ulx + 1000, uly + 1000
+
+                        # Define resolution and dimensions
+                        resolution = 0.2
+                        width = height = int(1000 / resolution)  # → 5000 px
+
+                        # Create transform from bounds
+                        transform = from_bounds(ulx, uly, lrx, lry, width, height)
+
+                        # Build raster profile
+                        profile = {
+                            "driver": "GTiff",
+                            "height": height,
+                            "width": width,
+                            "count": 1,
+                            "dtype": rasterio.uint8,
+                            "crs": "EPSG:25832",
+                            "transform": transform,
+                            "compress": "lzw",
+                            "photometric": "MINISBLACK",
+                        }
                         with rasterio.open(output_pred_file, "w", **profile) as dst:
                             dst.write(prediction, 1)
 
-                        profile.update(dtype=rasterio.uint16)
+                        profile.update(dtype=rasterio.uint16, photometric="MINISBLACK")
                         with rasterio.open(
                             output_entropy_basic_file, "w", **profile
                         ) as dst:
