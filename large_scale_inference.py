@@ -670,7 +670,11 @@ def inference_watcher():
     os.makedirs(entropy_subfolder, exist_ok=True)
 
     while True:
-        all_files = sorted(f for f in os.listdir(args.image_path) if f.endswith(".tif"))
+        all_files = sorted(
+            f
+            for f in os.listdir(args.image_path)
+            if f.endswith(".tiff") and "sub" not in f
+        )
         new_files = [f for f in all_files if f not in processed]
 
         if new_files:
