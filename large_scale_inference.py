@@ -131,31 +131,48 @@ def get_args():
     return parser.parse_args()
 
 
+import os
+import torch
+import numpy as np
+import cv2
+import rasterio
+from torch.utils.data import Dataset
+
+
 class InferenceDataset(Dataset):
     """
-    Custom PyTorch dataset for inference on geospatial image tiles with contextual neighborhood merging.
+    Custom PyTorch dataset for inference on geospatial image tiles.
 
-    This dataset loads one image tile at a time and optionally merges neighboring tiles
-    into the margins to preserve spatial context at patch boundaries. It prepares the image
-    for inference by applying a transformation (e.g., normalization), padding margins,
-    and converting to a PyTorch tensor.
+    This dataset loads one image tile at a time, applies optional transformations,
+    and prepares the image as a PyTorch tensor for model inference.
 
     Args:
         image_dir (str): Path to the directory containing input image tiles (GeoTIFF, PNG, JPG).
         patch_size (int): Patch size used for inference (used to calculate margin).
         transform (albumentations.BasicTransform, optional): Transformations to apply to the input image (e.g., normalization).
+        subset (list[str], optional): Optional list of specific filenames to include.
     """
 
-    def __init__(self, image_dir, patch_size, transform=None):
+    def __init__(self, image_dir, patch_size, transform=None, subset=None):
         self.image_dir = image_dir
         self.patch_size = patch_size
         self.margin = patch_size // 2
         self.transform = transform
 
-        # Load and sort image file names with supported extensions
-        self.image_files = sorted(
-            [f for f in os.listdir(image_dir) if f.endswith((".tif", ".png", ".jpg"))]
-        )
+        # List image files with supported extensions, exclude files with "sub"
+        all_images = [
+            f
+            for f in os.listdir(image_dir)
+            if f.lower().endswith((".tif", ".tiff", ".png", ".jpg"))
+            and "sub" not in f.lower()
+        ]
+
+        if subset:
+            # Only keep images that are both in subset and in directory
+            self.image_files = sorted([f for f in all_images if f in subset])
+        else:
+            self.image_files = sorted(all_images)
+
         if not self.image_files:
             raise ValueError(f"No valid images found in directory: {image_dir}")
 
@@ -163,22 +180,25 @@ class InferenceDataset(Dataset):
         image_name = self.image_files[index]
         image_path = os.path.join(self.image_dir, image_name)
 
-        # Load basic metadata of the center image
         with rasterio.open(image_path) as src:
+            image = src.read()  # (C, H, W)
+            transform = src.transform
             height = src.height
             width = src.width
-            transform = src.transform
 
-        # Convert CHW (rasterio) to HWC and ensure RGB color space
-        image = np.moveaxis(combined_image, 0, -1).astype(np.uint8)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Convert to (H, W, C)
+        image = np.moveaxis(image, 0, -1).astype(np.uint8)
 
-        # Apply optional normalization/augmentation
+        # Convert to RGB if needed (e.g., BGR → RGB)
+        if image.shape[2] == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Apply albumentations transform (e.g., normalization)
         if self.transform:
             augmented = self.transform(image=image)
             image = augmented["image"]
 
-        # Convert to tensor in CHW format
+        # Convert to PyTorch tensor in (C, H, W)
         image = torch.tensor(image).permute(2, 0, 1).float()
 
         return {
