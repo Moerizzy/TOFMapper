@@ -28,6 +28,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
+from rasterio.transform import from_bounds
 from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
 from orthophotos_downloader.data_scraping.image_download import (
