@@ -455,11 +455,11 @@ def sliding_window_inference_entropy_hann(model, images, patch_size=1024, stride
         entropy_map (Tensor): (B, H, W)
     """
 
-    def create_hann_window(size, device):
-        """Generates a 2D Hann window of shape (1, 1, H, W)"""
+    def create_flat_hann_window(size, device):
         hann_1d = torch.hann_window(size, periodic=False, device=device)
-        window = torch.outer(hann_1d, hann_1d)  # (H, W)
-        return window.unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+        flatter_1d = torch.sqrt(hann_1d)
+        window = torch.outer(flatter_1d, flatter_1d)
+        return window.unsqueeze(0).unsqueeze(0)
 
     B, C, H, W = images.shape
     device = images.device
