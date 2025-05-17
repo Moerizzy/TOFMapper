@@ -735,10 +735,10 @@ def inference_watcher():
                     input_path = input_paths[i]
                     base_name = os.path.splitext(image_names[i])[0]
                     output_pred_file = os.path.join(
-                        args.output_path, f"{base_name}.tif"
+                        args.output_path, f"{base_name}.tiff"
                     )
                     output_entropy_basic_file = os.path.join(
-                        entropy_subfolder, f"{base_name}_entropy_basic.tif"
+                        entropy_subfolder, f"{base_name}_entropy_basic.tiff"
                     )
 
                     with rasterio.open(input_path) as src:
