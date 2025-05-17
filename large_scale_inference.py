@@ -607,11 +607,8 @@ def download():
     args = get_args()
     seed_everything(42)
 
-    # Load configuration and model from checkpoint
-    config = py2cfg(args.config_path)
-
     utm_grid = args.utm_grid
-    image_path = args.image_path
+    image_path = Path(args.image_path)
 
     os.makedirs(image_path, exist_ok=True)
 
