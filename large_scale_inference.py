@@ -632,13 +632,18 @@ def download():
 
         utm_bounding_box = row.geometry
 
+        ulx = int(utm_bounding_box.geometry.bounds[0])
+        uly = int(utm_bounding_box.geometry.bounds[1])
+        prefix = f"{ulx}_{uly}"
+        path = image_path / f"RGB_32_{prefix}.tiff"
+
         minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
         width_px = int((maxx - minx) / wms.resolution)
         height_px = int((maxy - miny) / wms.resolution)
         polygon = box(minx, miny, maxx, maxy)
 
         img = downloader.download_single_image(
-            img_path=image_path,
+            img_path=path,
             bounding_box=polygon,
             wms=wms,
             width_px=width_px,
