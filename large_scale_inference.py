@@ -356,7 +356,11 @@ def polygonize_raster_to_geopackage(
             for s, v in shapes(image, mask=mask, transform=src.transform)
         )
         geoms = list(results)
-        gdf = gpd.GeoDataFrame.from_features(geoms, crs=src.crs)
+        gdf = gpd.GeoDataFrame.from_features(geoms)
+        if "geometry" not in gdf.columns or gdf.empty:
+            print(f"[Polygonize] No geometry found in {tif_path}, skipping.")
+            return
+        gdf.set_crs(src.crs, inplace=True)
 
     # --- Step 2: Pre-filtering and area computation ---
     gdf = gdf[gdf.is_valid].copy()
