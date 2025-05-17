@@ -455,7 +455,7 @@ def sliding_window_inference_entropy_hann(model, images, patch_size=1024, stride
         entropy_map (Tensor): (B, H, W)
     """
 
-    def create_flat_hann_window(size, device):
+    def create_hann_window(size, device):
         hann_1d = torch.hann_window(size, periodic=False, device=device)
         flatter_1d = torch.sqrt(hann_1d)
         window = torch.outer(flatter_1d, flatter_1d)
