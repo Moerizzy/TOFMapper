@@ -28,11 +28,16 @@ import geopandas as gpd
 import rasterio
 from rasterio.features import shapes
 from rasterio.merge import merge
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
+from orthophotos_downloader.data_scraping.image_download import (
+    ImageDownloader,
+    ExtendedWebMapService,
+)
 
 # Progress bar
 from tqdm import tqdm
+import threading
 
 # Custom modules
 from tools.cfg import py2cfg
@@ -90,6 +95,14 @@ def get_args():
     # Path where output masks will be saved (GeoTIFF or vector files)
     parser.add_argument(
         "-o", "--output_path", required=True, help="Path to save the output masks."
+    )
+
+    # Path to UTM grid (GeoPackage) for downloading images
+    parser.add_argument(
+        "-u",
+        "--utm_grid",
+        required=True,
+        help="Path to the UTM grid (GeoPackage) for downloading images.",
     )
 
     # Path to model/config YAML or Python config file
@@ -156,17 +169,6 @@ class InferenceDataset(Dataset):
             width = src.width
             transform = src.transform
 
-        # Find neighboring images within spatial proximity
-        neighbors = find_neighbors(image_path)
-
-        # Compute output shape with margin based on patch size and keep ratio
-        output_shape = (3, height + 2 * self.margin, width + 2 * self.margin)
-
-        # Combine center image with neighbors into a padded RGB array
-        combined_image = combine_neighbors(
-            neighbors, image_path, output_shape, nodata_value=0
-        )
-
         # Convert CHW (rasterio) to HWC and ensure RGB color space
         image = np.moveaxis(combined_image, 0, -1).astype(np.uint8)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -188,117 +190,6 @@ class InferenceDataset(Dataset):
 
     def __len__(self):
         return len(self.image_files)
-
-
-def find_neighbors(image_path, radius=500):
-    """
-    Finds neighboring image tiles (GeoTIFFs) that spatially overlap or are within a given buffer radius.
-
-    This function scans the directory of the input image and identifies all other `.tif` files
-    whose bounding boxes fall within a specified distance (`radius`) from the input image's bounds.
-    It is commonly used for stitching together adjacent tiles in tile-based inference or preprocessing.
-
-    Args:
-        image_path (str): Path to the center image file (GeoTIFF).
-        radius (int): Buffer distance in map units (e.g., meters) to consider as "neighboring".
-
-    Returns:
-        List[str]: List of file paths to neighboring image tiles within the radius.
-    """
-    # Read bounding box of the center image
-    with rasterio.open(image_path) as src:
-        bounds = src.bounds
-
-    neighbors = []
-    search_dir = os.path.dirname(image_path)
-
-    # Iterate over all GeoTIFF files in the same directory
-    for file in glob.glob(os.path.join(search_dir, "*.tif")):
-        if file == image_path:
-            continue  # Skip the input image itself
-
-        with rasterio.open(file) as src:
-            neighbor_bounds = src.bounds
-
-            # Check whether neighbor image is within radius of the center image bounds
-            if (
-                neighbor_bounds.left <= bounds.right + radius
-                and neighbor_bounds.right >= bounds.left - radius
-                and neighbor_bounds.bottom <= bounds.top + radius
-                and neighbor_bounds.top >= bounds.bottom - radius
-            ):
-                neighbors.append(file)
-
-    return neighbors
-
-
-def combine_neighbors(neighbors, center_image, output_shape, nodata_value=0):
-    """
-    Combines a center image with its spatially adjacent neighbor images into a single larger canvas.
-
-    This function creates a new image of shape `output_shape`, places the center image in the middle,
-    and fills in surrounding pixels using available neighboring orthophotos. Only non-overlapping regions
-    (where `nodata_value` is present) are filled by neighbor data, preserving priority of the center tile.
-
-    Args:
-        neighbors (List[str]): Paths to neighboring image tiles (GeoTIFFs).
-        center_image (str): Path to the center image (GeoTIFF) that should be prioritized.
-        output_shape (Tuple[int, int, int]): Desired output image shape (C, H, W).
-        nodata_value (int or float): Fill value used for uninitialized pixels (default: 0).
-
-    Returns:
-        np.ndarray: Combined image array of shape (C, H, W) with center and neighbor data merged.
-    """
-    # Initialize the output array with nodata_value
-    combined = np.full(output_shape, nodata_value, dtype=np.float32)
-
-    # Insert the center image in the middle of the canvas
-    with rasterio.open(center_image) as src:
-        center_data = src.read()[:3, :, :]  # Only take the first 3 bands (RGB)
-        center_h = (output_shape[1] - center_data.shape[1]) // 2
-        center_w = (output_shape[2] - center_data.shape[2]) // 2
-
-        combined[
-            :,
-            center_h : center_h + center_data.shape[1],
-            center_w : center_w + center_data.shape[2],
-        ] = center_data
-
-    # Load and merge neighbor images if any exist
-    valid_neighbors = [n for n in neighbors if os.path.exists(n)]
-    if valid_neighbors:
-        src_files = [rasterio.open(neighbor) for neighbor in valid_neighbors]
-        try:
-            # Merge all neighbors into a single mosaic
-            mosaic, transform = merge(src_files)
-            mosaic = mosaic[:3, :, :]  # Keep only RGB bands
-
-            # Clip mosaic to output shape if needed
-            mosaic_h = min(mosaic.shape[1], output_shape[1])
-            mosaic_w = min(mosaic.shape[2], output_shape[2])
-
-            # Center-align the mosaic in the output canvas
-            offset_h = (output_shape[1] - mosaic_h) // 2
-            offset_w = (output_shape[2] - mosaic_w) // 2
-
-            # Create a mask for areas in the combined image that are still nodata
-            mask = (
-                combined[
-                    :, offset_h : offset_h + mosaic_h, offset_w : offset_w + mosaic_w
-                ]
-                == nodata_value
-            )
-
-            # Fill only nodata areas with the mosaic content (preserving center priority)
-            combined[:, offset_h : offset_h + mosaic_h, offset_w : offset_w + mosaic_w][
-                mask
-            ] = mosaic[:, :mosaic_h, :mosaic_w][mask]
-        finally:
-            # Always close rasterio files
-            for src in src_files:
-                src.close()
-
-    return combined
 
 
 def fill_small_holes(geom, hole_area_threshold=100):
@@ -468,6 +359,10 @@ def polygonize_raster_to_geopackage(
     result = result[result["area"] >= min_area].copy()
     result.to_file(output_gpkg, driver="GPKG")
 
+    # --- Step 6: Clean up temporary files ---
+    if os.path.exists(tif_path):
+        os.remove(tif_path)
+
 
 def process_image(image_path):
     """
@@ -619,7 +514,7 @@ def extract_coords_from_filename(filename):
     """
     Extract x_sw and y_sw from filename like dop20_rgb_32709_5605_1.tiff
     """
-    match = re.search(r"dop20_rgb_32(\d{3})_(\d{4})_", filename)
+    match = re.search(r"image_32_(\d{3})000_(\d{4})000.tiff", filename)
     if match:
         x_sw = int(match.group(1)) * 1000
         y_sw = int(match.group(2)) * 1000
@@ -690,20 +585,75 @@ def aggregate_uncertainty_by_filename(
     return tile_grid
 
 
-def main():
+download_done = threading.Event()
+processed = set()
+
+
+def download():
     """
-    Main execution function for large-scale raster segmentation inference.
+    Downloads and processes a single image by running inference and polygonization.
 
     This function:
-    - Loads the trained model checkpoint
-    - Runs inference on each image using sliding window with batched patches
-    - Writes prediction results as GeoTIFFs with original metadata
-    - Polygonizes predictions and postprocesses using parallel processing
+    - Downloads the image from a given path
+    - Runs inference using the trained model
+    - Polygonizes the output raster and saves it as a GeoPackage
+
+    Args:
+        image_path (str): Path to the input image file.
+
+    Returns:
+        str: Path to the output GeoPackage file.
     """
     args = get_args()
     seed_everything(42)
 
     # Load configuration and model from checkpoint
+    config = py2cfg(args.config_path)
+
+    utm_grid = args.utm_grid
+    image_path = args.image_path
+
+    os.makedirs(image_path, exist_ok=True)
+
+    # Load UTM grid
+    tile_grid = gpd.read_file(utm_grid)
+
+    wms = ExtendedWebMapService(
+        url="https://geodienste.sachsen.de/wms_geosn_dop_2018_2020/guest",
+        version="1.3.0",
+        resolution=0.2,
+        layer_name="dop_2018_2020_rgb",
+        crs="EPSG:25832",
+        format="image/tiff",
+    )
+
+    margin_m = (args.patch_size * wms.resolution) // 2
+
+    downloader = ImageDownloader(wms, grid_spacing=1000)  # z. B. 1000 Meter Kacheln
+
+    for _, row in tile_grid.iterrows():
+
+        utm_bounding_box = row.geometry
+
+        minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
+        width_px = int((maxx - minx) / wms.resolution)
+        height_px = int((maxy - miny) / wms.resolution)
+        polygon = box(minx, miny, maxx, maxy)
+
+        img = downloader.download_single_image(
+            img_path=image_path,
+            bounding_box=polygon,
+            wms=wms,
+            width_px=width_px,
+            height_px=height_px,
+            driver="GTiff",
+        )
+
+
+def inference_watcher():
+    args = get_args()
+    seed_everything(42)
+
     config = py2cfg(args.config_path)
     model = Supervision_Train.load_from_checkpoint(
         os.path.join(config.weights_path, config.test_weights_name + ".ckpt"),
@@ -713,96 +663,116 @@ def main():
     model = torch.nn.DataParallel(model)
     model.eval()
 
-    # Prepare dataset and dataloader
-    dataset = InferenceDataset(
-        image_dir=args.image_path,
-        patch_size=args.patch_size,
-        transform=albu.Normalize(),
-    )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
-
     os.makedirs(args.output_path, exist_ok=True)
+    entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
+    os.makedirs(entropy_subfolder, exist_ok=True)
 
-    # Process each batch of large images
-    for batch in tqdm(dataloader, desc="Processing Images"):
+    while True:
+        all_files = sorted(f for f in os.listdir(args.image_path) if f.endswith(".tif"))
+        new_files = [f for f in all_files if f not in processed]
 
-        images = batch["image"].cuda()
-        image_names = batch["image_name"]
-        input_paths = [os.path.join(args.image_path, name) for name in image_names]
+        if new_files:
+            print(f"[Inference] Found {len(new_files)} new images.")
 
-        logits, entropy_map_basic = sliding_window_inference_entropy_hann(
-            model,
-            images,
-            patch_size=args.patch_size,
-            stride=args.patch_size // 2,
-        )
-
-        predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
-
-        written_tif_paths = []
-
-        for i in range(len(images)):
-            prediction = predictions[i].cpu().numpy().astype(np.uint8)
-            entropy_basic = entropy_map_basic[i].cpu().numpy().astype(np.float32)
-
-            input_path = input_paths[i]
-            base_name = os.path.splitext(image_names[i])[0]
-            output_pred_file = os.path.join(args.output_path, f"{base_name}.tif")
-            # Define the entropy subfolder path
-            entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
-
-            # Create the folder if it doesn't exist
-            os.makedirs(entropy_subfolder, exist_ok=True)
-
-            # Define the output file path within the entropy subfolder
-            output_entropy_basic_file = os.path.join(
-                entropy_subfolder, f"{base_name}_entropy_basic.tif"
+            dataset = InferenceDataset(
+                image_dir=args.image_path,
+                patch_size=args.patch_size,
+                transform=albu.Normalize(),
+                subset=new_files,
             )
+            dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-            written_tif_paths.append(output_pred_file)
+            for batch in tqdm(dataloader, desc="Processing Images"):
+                images = batch["image"].cuda()
+                image_names = batch["image_name"]
+                input_paths = [
+                    os.path.join(args.image_path, name) for name in image_names
+                ]
 
-            with rasterio.open(input_path) as src:
-                height, width = src.height, src.width
-
-                def center_crop(arr):
-                    if arr.shape != (height, width):
-                        center_h = (arr.shape[0] - height) // 2
-                        center_w = (arr.shape[1] - width) // 2
-                        return arr[
-                            center_h : center_h + height, center_w : center_w + width
-                        ]
-                    return arr
-
-                prediction = center_crop(prediction)
-                entropy_basic = center_crop(entropy_basic)
-                entropy_basic = (center_crop(entropy_basic) * 1000).astype(np.uint16)
-
-                profile = src.profile
-                profile.update(
-                    dtype=rasterio.uint8, count=1, compress="lzw", photometric=None
+                logits, entropy_map_basic = sliding_window_inference_entropy_hann(
+                    model,
+                    images,
+                    patch_size=args.patch_size,
+                    stride=args.patch_size // 2,
                 )
-                with rasterio.open(output_pred_file, "w", **profile) as dst:
-                    dst.write(prediction, 1)
 
-                profile.update(dtype=rasterio.uint16)
-                with rasterio.open(output_entropy_basic_file, "w", **profile) as dst:
-                    dst.write(entropy_basic, 1)
+                predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
+                written_tif_paths = []
 
-        run_parallel_polygonization(written_tif_paths)
+                for i in range(len(images)):
+                    prediction = predictions[i].cpu().numpy().astype(np.uint8)
+                    entropy_basic = (
+                        entropy_map_basic[i].cpu().numpy().astype(np.float32)
+                    )
 
-    gpkg_path = "data/utm_grid/Sachen_Grid_ETRS89-UTM32_1km.gpkg"
-    tile_grid = gpd.read_file(gpkg_path)
+                    input_path = input_paths[i]
+                    base_name = os.path.splitext(image_names[i])[0]
+                    output_pred_file = os.path.join(
+                        args.output_path, f"{base_name}.tif"
+                    )
+                    output_entropy_basic_file = os.path.join(
+                        entropy_subfolder, f"{base_name}_entropy_basic.tif"
+                    )
 
-    # Convert string path to Path object
-    entropy_subfolder = Path(os.path.join(args.output_path, "entropy_maps"))
+                    with rasterio.open(input_path) as src:
+                        height, width = 5000, 5000
 
-    for raster_path in entropy_subfolder.glob("*.tif"):
-        tile_grid = aggregate_uncertainty_by_filename(
-            raster_path, tile_grid, threshold=600, prefix="entropy"
-        )
+                        def center_crop(arr):
+                            if arr.shape != (height, width):
+                                center_h = (arr.shape[0] - height) // 2
+                                center_w = (arr.shape[1] - width) // 2
+                                return arr[
+                                    center_h : center_h + height,
+                                    center_w : center_w + width,
+                                ]
+                            return arr
 
-    tile_grid.to_file("results/grid_with_entropy.gpkg", driver="GPKG")
+                        prediction = center_crop(prediction)
+                        entropy_basic = (center_crop(entropy_basic) * 1000).astype(
+                            np.uint16
+                        )
+
+                        profile = src.profile
+                        profile.update(
+                            dtype=rasterio.uint8,
+                            count=1,
+                            compress="lzw",
+                            photometric=None,
+                        )
+                        with rasterio.open(output_pred_file, "w", **profile) as dst:
+                            dst.write(prediction, 1)
+
+                        profile.update(dtype=rasterio.uint16)
+                        with rasterio.open(
+                            output_entropy_basic_file, "w", **profile
+                        ) as dst:
+                            dst.write(entropy_basic, 1)
+
+                    written_tif_paths.append(output_pred_file)
+                    processed.add(image_names[i])
+
+                run_parallel_polygonization(written_tif_paths)
+
+        elif download_done.is_set():
+            print("[Inference] No more new files. Exiting.")
+            break
+
+        time.sleep(2)
+
+
+def download_wrapper():
+    download()
+    download_done.set()
 
 
 if __name__ == "__main__":
-    main()
+    t1 = threading.Thread(target=download_wrapper)
+    t2 = threading.Thread(target=inference_watcher)
+
+    t1.start()
+    t2.start()
+
+    t1.join()
+    t2.join()
+
+    print("✅ Alle Bilder heruntergeladen und inferiert.")
