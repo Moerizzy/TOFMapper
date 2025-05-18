@@ -792,7 +792,7 @@ def inference_watcher():
 
 
 def download_partition(
-    tile_subset, args, wms, margin_m, downloader, image_path, state, already_done
+    tile_subset, args, wms, margin_m, downloader, image_path, state, skip_tiles
 ):
     for _, row in tile_subset.iterrows():
         try:
@@ -803,7 +803,7 @@ def download_partition(
             tile_id = f"image_32_{prefix}"
 
             # ✅ Überspringe, wenn Ergebnis schon existiert
-            if tile_id in already_done:
+            if tile_id in skip_tiles:
                 with state.lock:
                     state.counter += 1
                     print(
@@ -816,6 +816,7 @@ def download_partition(
             minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
             width_px = int((maxx - minx) / wms.resolution)
             height_px = int((maxy - miny) / wms.resolution)
+            print(f"[Download] Downloading tile {tile_id} ({width_px} x {height_px})")
             polygon = box(minx, miny, maxx, maxy)
 
             downloader.download_single_image(
@@ -866,6 +867,12 @@ def download_wrapper():
         for f in os.listdir(entropy_dir)
         if f.endswith(".tiff")
     }
+    already_downloaded = {
+        f.replace(".tiff", "")
+        for f in os.listdir(args.image_path)
+        if f.endswith(".tiff")
+    }
+    skip_tiles = already_done.union(already_downloaded)
 
     # ✅ Fortschritt initialisieren
     state = DownloadState(total=args.tile_count)
@@ -883,7 +890,7 @@ def download_wrapper():
                 downloader,
                 image_path,
                 state,
-                already_done,
+                skip_tiles,
             ),
             name=f"Downloader-{i+1}",
         )
