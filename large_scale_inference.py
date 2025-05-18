@@ -618,9 +618,6 @@ def aggregate_uncertainty_by_filename(
     return tile_grid
 
 
-# Globale Synchronisation
-
-
 def inference_watcher():
     args = get_args()
     seed_everything(42)
@@ -639,6 +636,15 @@ def inference_watcher():
     os.makedirs(args.output_path, exist_ok=True)
     entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
     os.makedirs(entropy_subfolder, exist_ok=True)
+    done_once = {
+        f.replace("_entropy_basic.tiff", "")
+        for f in os.listdir(entropy_subfolder)
+        if f.endswith(".tiff")
+    }
+
+    # Globalen Fortschrittszähler setzen
+    global inference_counter
+    inference_counter = len(done_once)
 
     while True:
         all_files = sorted(
@@ -646,7 +652,11 @@ def inference_watcher():
             for f in os.listdir(args.image_path)
             if f.endswith(".tiff") and "sub" not in f
         )
-        new_files = [f for f in all_files if f not in processed]
+        new_files = [
+            f
+            for f in all_files
+            if os.path.splitext(f)[0] not in done_once and f not in processed
+        ]
 
         if new_files:
             print(f"[Inference] Found {len(new_files)} new images.")
@@ -780,14 +790,27 @@ def inference_watcher():
         time.sleep(2)
 
 
-def download_partition(tile_subset, args, wms, margin_m, downloader, image_path, state):
+def download_partition(
+    tile_subset, args, wms, margin_m, downloader, image_path, state, already_done
+):
     for _, row in tile_subset.iterrows():
         try:
             utm_bounding_box = row.geometry
             ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
             uly = int(round(utm_bounding_box.bounds[1] / 1000) * 1000)
             prefix = f"{ulx}_{uly}"
-            path = image_path / f"image_32_{prefix}.tiff"
+            tile_id = f"image_32_{prefix}"
+
+            # ✅ Überspringe, wenn Ergebnis schon existiert
+            if tile_id in already_done:
+                with state.lock:
+                    state.counter += 1
+                    print(
+                        f"[Download] Skipped tile {tile_id} ({state.counter} / {state.total})"
+                    )
+                continue
+
+            path = image_path / f"{tile_id}.tiff"
 
             minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
             width_px = int((maxx - minx) / wms.resolution)
@@ -835,14 +858,32 @@ def download_wrapper():
     margin_m = (args.patch_size * wms.resolution) // 2
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
-    # Gemeinsamer Zustand
+    # ✅ Fertig vorhandene Ergebnisse anhand von entropy_maps prüfen
+    entropy_dir = os.path.join(args.output_path, "entropy_maps")
+    already_done = {
+        f.replace("_entropy_basic.tiff", "")
+        for f in os.listdir(entropy_dir)
+        if f.endswith(".tiff")
+    }
+
+    # ✅ Fortschritt initialisieren
     state = DownloadState(total=args.tile_count)
+    state.counter = len(already_done)
 
     threads = []
     for i, subset in enumerate(tile_subsets):
         t = threading.Thread(
             target=download_partition,
-            args=(subset, args, wms, margin_m, downloader, image_path, state),
+            args=(
+                subset,
+                args,
+                wms,
+                margin_m,
+                downloader,
+                image_path,
+                state,
+                already_done,
+            ),
             name=f"Downloader-{i+1}",
         )
         threads.append(t)
