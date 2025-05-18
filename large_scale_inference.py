@@ -621,6 +621,9 @@ def aggregate_uncertainty_by_filename(
 def inference_watcher():
     global inference_counter
 
+    CHUNK_SIZE = 20
+    processed_in_chunk = 0
+
     args = get_args()
     seed_everything(42)
     tile_grid = gpd.read_file(args.utm_grid)
@@ -638,13 +641,12 @@ def inference_watcher():
     os.makedirs(args.output_path, exist_ok=True)
     entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
     os.makedirs(entropy_subfolder, exist_ok=True)
+
     done_once = {
         f.replace("_entropy_basic.tiff", "")
         for f in os.listdir(entropy_subfolder)
         if f.endswith(".tiff")
     }
-
-    # Globalen Fortschrittszähler setzen
 
     inference_counter = len(done_once)
 
@@ -660,135 +662,130 @@ def inference_watcher():
             if os.path.splitext(f)[0] not in done_once and f not in processed
         ]
 
-        if new_files:
-            print(f"[Inference] Found {len(new_files)} new images.")
+        if not new_files:
+            if download_done.is_set():
+                print("[Inference] No more new files. Exiting.")
+                break
+            time.sleep(2)
+            continue
 
-            dataset = InferenceDataset(
-                image_dir=args.image_path,
+        # Nur die ersten CHUNK_SIZE verarbeiten
+        current_batch = new_files[:CHUNK_SIZE]
+        print(f"[Inference] Found {len(current_batch)} new images.")
+
+        dataset = InferenceDataset(
+            image_dir=args.image_path,
+            patch_size=args.patch_size,
+            transform=albu.Normalize(),
+            subset=current_batch,
+        )
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+
+        for batch in tqdm(dataloader, desc="Processing Images"):
+            images = batch["image"].cuda()
+            image_names = batch["image_name"]
+            input_paths = [os.path.join(args.image_path, name) for name in image_names]
+
+            logits, entropy_map_basic = sliding_window_inference_entropy_hann(
+                model,
+                images,
                 patch_size=args.patch_size,
-                transform=albu.Normalize(),
-                subset=new_files,
+                stride=args.patch_size // 2,
             )
-            dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
-            for batch in tqdm(dataloader, desc="Processing Images"):
-                images = batch["image"].cuda()
-                image_names = batch["image_name"]
-                input_paths = [
-                    os.path.join(args.image_path, name) for name in image_names
-                ]
+            predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
+            written_tif_paths = []
 
-                logits, entropy_map_basic = sliding_window_inference_entropy_hann(
-                    model,
-                    images,
-                    patch_size=args.patch_size,
-                    stride=args.patch_size // 2,
+            for i in range(len(images)):
+                prediction = predictions[i].cpu().numpy().astype(np.uint8)
+                entropy_basic = entropy_map_basic[i].cpu().numpy().astype(np.float32)
+
+                input_path = input_paths[i]
+                base_name = os.path.splitext(image_names[i])[0]
+                output_pred_file = os.path.join(args.output_path, f"{base_name}.tiff")
+                output_entropy_basic_file = os.path.join(
+                    entropy_subfolder, f"{base_name}_entropy_basic.tiff"
                 )
 
-                predictions = nn.Softmax(dim=1)(logits).argmax(dim=1)
-                written_tif_paths = []
+                with rasterio.open(input_path) as src:
+                    height, width = 5000, 5000
 
-                for i in range(len(images)):
-                    prediction = predictions[i].cpu().numpy().astype(np.uint8)
-                    entropy_basic = (
-                        entropy_map_basic[i].cpu().numpy().astype(np.float32)
+                    def center_crop(arr):
+                        if arr.shape != (height, width):
+                            center_h = (arr.shape[0] - height) // 2
+                            center_w = (arr.shape[1] - width) // 2
+                            return arr[
+                                center_h : center_h + height,
+                                center_w : center_w + width,
+                            ]
+                        return arr
+
+                    prediction = center_crop(prediction)
+                    entropy_basic = (center_crop(entropy_basic) * 1000).astype(
+                        np.uint16
                     )
 
-                    input_path = input_paths[i]
-                    base_name = os.path.splitext(image_names[i])[0]
-                    output_pred_file = os.path.join(
-                        args.output_path, f"{base_name}.tiff"
-                    )
-                    output_entropy_basic_file = os.path.join(
-                        entropy_subfolder, f"{base_name}_entropy_basic.tiff"
-                    )
-
-                    with rasterio.open(input_path) as src:
-                        height, width = 5000, 5000
-
-                        def center_crop(arr):
-                            if arr.shape != (height, width):
-                                center_h = (arr.shape[0] - height) // 2
-                                center_w = (arr.shape[1] - width) // 2
-                                return arr[
-                                    center_h : center_h + height,
-                                    center_w : center_w + width,
-                                ]
-                            return arr
-
-                        prediction = center_crop(prediction)
-                        entropy_basic = (center_crop(entropy_basic) * 1000).astype(
-                            np.uint16
+                    match = re.search(r"(\d{6})_(\d{7})", base_name)
+                    if not match:
+                        raise ValueError(
+                            f"Filename {base_name} does not contain valid UTM coords."
                         )
 
-                        # Extract UTM coordinates from filename
-                        match = re.search(r"(\d{6})_(\d{7})", base_name)
-                        if not match:
-                            raise ValueError(
-                                f"Filename {base_name} does not contain valid UTM coords."
-                            )
+                    ulx, uly = map(int, match.groups())
+                    lrx, lry = ulx + 1000, uly + 1000
+                    resolution = 0.2
+                    width = height = int(1000 / resolution)
 
-                        ulx, uly = map(int, match.groups())
-                        lrx, lry = ulx + 1000, uly + 1000
+                    transform = from_bounds(ulx, uly, lrx, lry, width, height)
 
-                        # Define resolution and dimensions
-                        resolution = 0.2
-                        width = height = int(1000 / resolution)  # → 5000 px
+                    profile = {
+                        "driver": "GTiff",
+                        "height": height,
+                        "width": width,
+                        "count": 1,
+                        "dtype": rasterio.uint8,
+                        "crs": "EPSG:25832",
+                        "transform": transform,
+                        "compress": "lzw",
+                        "photometric": "MINISBLACK",
+                    }
+                    with rasterio.open(output_pred_file, "w", **profile) as dst:
+                        dst.write(prediction, 1)
 
-                        # Create transform from bounds
-                        transform = from_bounds(ulx, uly, lrx, lry, width, height)
+                    profile.update(dtype=rasterio.uint16)
+                    with rasterio.open(
+                        output_entropy_basic_file, "w", **profile
+                    ) as dst:
+                        dst.write(entropy_basic, 1)
 
-                        # Build raster profile
-                        profile = {
-                            "driver": "GTiff",
-                            "height": height,
-                            "width": width,
-                            "count": 1,
-                            "dtype": rasterio.uint8,
-                            "crs": "EPSG:25832",
-                            "transform": transform,
-                            "compress": "lzw",
-                            "photometric": "MINISBLACK",
-                        }
-                        with rasterio.open(output_pred_file, "w", **profile) as dst:
-                            dst.write(prediction, 1)
+                written_tif_paths.append(output_pred_file)
+                processed.add(image_names[i])
+                with inference_lock:
+                    inference_counter += 1
+                    print(
+                        f"[Inference] {inference_counter} / {args.tile_count} tiles processed"
+                    )
 
-                        profile.update(dtype=rasterio.uint16, photometric="MINISBLACK")
-                        with rasterio.open(
-                            output_entropy_basic_file, "w", **profile
-                        ) as dst:
-                            dst.write(entropy_basic, 1)
+            run_parallel_polygonization(written_tif_paths)
 
-                    written_tif_paths.append(output_pred_file)
-                    processed.add(image_names[i])
-                    with inference_lock:
-                        inference_counter += 1
-                        print(
-                            f"[Inference] {inference_counter} / {args.tile_count} tiles processed"
-                        )
+            for tif_path in written_tif_paths:
+                try:
+                    os.remove(tif_path)
+                    print(f"[Cleanup] Deleted {tif_path}")
+                    base_name = Path(tif_path).stem
+                    original_input = Path(args.image_path) / f"{base_name}.tiff"
+                    if original_input.exists():
+                        os.remove(original_input)
+                        print(f"[Cleanup] Deleted input: {original_input}")
+                except Exception as e:
+                    print(f"[Cleanup] Failed to delete {tif_path}: {e}")
 
-                run_parallel_polygonization(written_tif_paths)
-
-                # --- Delete all processed TIFF files ---
-                for tif_path in written_tif_paths:
-                    try:
-                        os.remove(tif_path)
-                        print(f"[Cleanup] Deleted {tif_path}")
-                        # TIFF im image_dir entfernen
-                        # TIFF im image_dir entfernen
-                        base_name = Path(tif_path).stem  # z. B. image_32_734000_5563000
-                        original_input = Path(args.image_path) / f"{base_name}.tiff"
-                        if original_input.exists():
-                            os.remove(original_input)
-                            print(f"[Cleanup] Deleted input: {original_input}")
-                    except Exception as e:
-                        print(f"[Cleanup] Failed to delete {tif_path}: {e}")
-
-        elif download_done.is_set():
-            print("[Inference] No more new files. Exiting.")
-            break
-
-        time.sleep(2)
+            processed_in_chunk += len(written_tif_paths)
+            if processed_in_chunk >= CHUNK_SIZE:
+                print(
+                    f"[Inference] Processed {CHUNK_SIZE} images, exiting for restart."
+                )
+                return  # Beendet den Thread sauber
 
 
 def download_partition(
@@ -908,12 +905,15 @@ def download_wrapper():
 
 if __name__ == "__main__":
     t1 = threading.Thread(target=download_wrapper)
-    t2 = threading.Thread(target=inference_watcher)
-
     t1.start()
-    t2.start()
 
-    t1.join()
-    t2.join()
+    while True:
+        t2 = threading.Thread(target=inference_watcher)
+        t2.start()
+        t2.join()
 
-    print("✅ Alle Bilder heruntergeladen und inferiert.")
+        if download_done.is_set():
+            print("✅ Alle Bilder heruntergeladen und inferiert.")
+            break
+
+        print("[Main] Neustart der Inferenz nach CHUNK.")
