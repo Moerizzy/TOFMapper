@@ -619,6 +619,8 @@ def aggregate_uncertainty_by_filename(
 
 
 def inference_watcher():
+    global inference_counter
+
     args = get_args()
     seed_everything(42)
     tile_grid = gpd.read_file(args.utm_grid)
@@ -643,7 +645,7 @@ def inference_watcher():
     }
 
     # Globalen Fortschrittszähler setzen
-    global inference_counter
+
     inference_counter = len(done_once)
 
     while True:
@@ -760,7 +762,6 @@ def inference_watcher():
                     written_tif_paths.append(output_pred_file)
                     processed.add(image_names[i])
                     with inference_lock:
-                        global inference_counter
                         inference_counter += 1
                         print(
                             f"[Inference] {inference_counter} / {args.tile_count} tiles processed"
