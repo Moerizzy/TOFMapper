@@ -816,7 +816,9 @@ def download_partition(
             minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
             width_px = int((maxx - minx) / wms.resolution)
             height_px = int((maxy - miny) / wms.resolution)
-            print(f"[Download] Downloading tile {tile_id} ({width_px} x {height_px})")
+            # Quadratgröße: den größeren Wert wählen
+            size_px = max(width_px, height_px)
+            width_px = height_px = size_px
             polygon = box(minx, miny, maxx, maxy)
 
             downloader.download_single_image(
