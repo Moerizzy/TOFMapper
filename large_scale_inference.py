@@ -1,11 +1,11 @@
 import argparse
-import glob
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
 from pathlib import Path
 import re
+import gc
 
 # Scientific and numerical libraries
 import numpy as np
@@ -43,6 +43,34 @@ import threading
 # Custom modules
 from tools.cfg import py2cfg
 from train_supervision import *
+
+import threading
+import signal
+import sys
+
+
+import os
+import torch
+import numpy as np
+import cv2
+import rasterio
+from torch.utils.data import Dataset
+
+# Globaler Abbruchschalter
+stop_signal = threading.Event()
+download_done = threading.Event()
+processed = set()
+inference_counter = 0
+inference_lock = threading.Lock()
+
+
+def signal_handler(sig, frame):
+    print("\n[Main] Abbruchsignal empfangen. Beende alle Threads sauber...")
+    stop_signal.set()  # Setze das Abbruch-Flag
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
 
 
 def seed_everything(seed):
@@ -130,19 +158,6 @@ def get_args():
     )
 
     return parser.parse_args()
-
-
-import os
-import torch
-import numpy as np
-import cv2
-import rasterio
-from torch.utils.data import Dataset
-
-download_done = threading.Event()
-processed = set()
-inference_counter = 0
-inference_lock = threading.Lock()
 
 
 class DownloadState:
@@ -651,6 +666,9 @@ def inference_watcher():
     inference_counter = len(done_once)
 
     while True:
+        if stop_signal.is_set():
+            print("[Inference] Stop signal received. Exiting thread.")
+            return
         all_files = sorted(
             f
             for f in os.listdir(args.image_path)
@@ -682,6 +700,9 @@ def inference_watcher():
         dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
 
         for batch in tqdm(dataloader, desc="Processing Images"):
+            if stop_signal.is_set():
+                print("[Inference] Stop during batch. Exiting.")
+                return
             images = batch["image"].cuda()
             image_names = batch["image_name"]
             input_paths = [os.path.join(args.image_path, name) for name in image_names]
@@ -785,13 +806,19 @@ def inference_watcher():
                 print(
                     f"[Inference] Processed {CHUNK_SIZE} images, exiting for restart."
                 )
-                return  # Beendet den Thread sauber
+                gc.collect()
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+                return
 
 
 def download_partition(
     tile_subset, args, wms, margin_m, downloader, image_path, state, skip_tiles
 ):
     for _, row in tile_subset.iterrows():
+        if stop_signal.is_set():
+            print("[Download] Stop signal received. Exiting thread.")
+            return
         try:
             utm_bounding_box = row.geometry
             ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
@@ -904,10 +931,11 @@ def download_wrapper():
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal_handler)
     t1 = threading.Thread(target=download_wrapper)
     t1.start()
 
-    while True:
+    while not stop_signal.is_set():
         t2 = threading.Thread(target=inference_watcher)
         t2.start()
         t2.join()
