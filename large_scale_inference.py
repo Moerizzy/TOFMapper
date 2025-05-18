@@ -862,6 +862,28 @@ def download_wrapper():
     image_path = Path(args.image_path)
     os.makedirs(image_path, exist_ok=True)
 
+    # --- Step 1: Remove inconsistent TIFF files ---
+    target_shape = (6020, 6020)
+    removed = 0
+    for filename in os.listdir(image_path):
+        if not filename.endswith(".tiff"):
+            continue
+        path = image_path / filename
+        try:
+            with rasterio.open(path) as src:
+                if (src.height, src.width) != target_shape:
+                    print(
+                        f"[Cleanup] Removed invalid image: {filename} ({src.width}x{src.height})"
+                    )
+                    os.remove(path)
+                    removed += 1
+        except Exception as e:
+            print(f"[Cleanup] Failed to read {filename}: {e}")
+            os.remove(path)
+            removed += 1
+    if removed:
+        print(f"[Cleanup] {removed} inconsistent images removed from input folder.")
+
     tile_grid = gpd.read_file(args.utm_grid)
     args.tile_count = len(tile_grid)
 
