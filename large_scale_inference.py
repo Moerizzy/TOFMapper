@@ -1,29 +1,32 @@
+# Standard libraries
 import argparse
 import os
+import re
+import sys
 import time
+import signal
+import gc
+from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import cpu_count
-from pathlib import Path
-import re
-import gc
+import threading
 
-# Scientific and numerical libraries
+# Numerical and data libraries
 import numpy as np
 import pandas as pd
 
-# PyTorch and related
+# PyTorch libraries
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from torch.cuda.amp import autocast
-import torch.nn.functional as F
-
 
 # Image processing and augmentation
 import cv2
 import albumentations as albu
 
-# Geospatial
+# Geospatial libraries
 import geopandas as gpd
 import rasterio
 from rasterio.features import shapes
@@ -31,6 +34,8 @@ from rasterio.merge import merge
 from rasterio.transform import from_bounds
 from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.ops import unary_union
+
+# Orthophoto downloader
 from orthophotos_downloader.data_scraping.image_download import (
     ImageDownloader,
     ExtendedWebMapService,
@@ -38,23 +43,11 @@ from orthophotos_downloader.data_scraping.image_download import (
 
 # Progress bar
 from tqdm import tqdm
-import threading
 
-# Custom modules
+# Configuration and training logic
 from tools.cfg import py2cfg
 from train_supervision import *
 
-import threading
-import signal
-import sys
-
-
-import os
-import torch
-import numpy as np
-import cv2
-import rasterio
-from torch.utils.data import Dataset
 
 # Globaler Abbruchschalter
 stop_signal = threading.Event()
