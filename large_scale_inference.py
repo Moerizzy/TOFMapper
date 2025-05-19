@@ -160,6 +160,32 @@ class DownloadState:
         self.total = total
 
 
+# Thread-safe shared set for already processed tiles
+class ProcessedTiles:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.tiles = set()
+
+    def load_from_outputs(self, output_dir):
+        entropy_dir = Path(output_dir) / "entropy_maps"
+        if entropy_dir.exists():
+            for f in os.listdir(entropy_dir):
+                if f.endswith("_entropy_basic.tiff"):
+                    self.tiles.add(f.replace("_entropy_basic.tiff", ""))
+
+    def add(self, tile_id):
+        with self.lock:
+            self.tiles.add(tile_id)
+
+    def __contains__(self, tile_id):
+        with self.lock:
+            return tile_id in self.tiles
+
+    def size(self):
+        with self.lock:
+            return len(self.tiles)
+
+
 class InferenceDataset(Dataset):
     """
     Custom PyTorch dataset for inference on geospatial image tiles.
@@ -651,18 +677,14 @@ def inference_watcher():
     entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
     os.makedirs(entropy_subfolder, exist_ok=True)
 
-    done_once = {
-        f.replace("_entropy_basic.tiff", "")
-        for f in os.listdir(entropy_subfolder)
-        if f.endswith(".tiff")
-    }
-
-    inference_counter = len(done_once)
+    tracker = ProcessedTiles(output_path=args.output_path, image_path=args.image_path)
+    inference_counter = tracker.count()
 
     while True:
         if stop_signal.is_set():
             print("[Inference] Stop signal received. Exiting thread.")
             return
+
         all_files = sorted(
             f
             for f in os.listdir(args.image_path)
@@ -671,7 +693,7 @@ def inference_watcher():
         new_files = [
             f
             for f in all_files
-            if os.path.splitext(f)[0] not in done_once and f not in processed
+            if not tracker.contains(os.path.splitext(f)[0]) and f not in processed
         ]
 
         if not new_files:
@@ -681,7 +703,6 @@ def inference_watcher():
             time.sleep(2)
             continue
 
-        # Nur die ersten CHUNK_SIZE verarbeiten
         current_batch = new_files[:CHUNK_SIZE]
         print(f"[Inference] Found {len(current_batch)} new images.")
 
@@ -697,6 +718,7 @@ def inference_watcher():
             if stop_signal.is_set():
                 print("[Inference] Stop during batch. Exiting.")
                 return
+
             images = batch["image"].cuda()
             image_names = batch["image_name"]
             input_paths = [os.path.join(args.image_path, name) for name in image_names]
@@ -780,6 +802,7 @@ def inference_watcher():
                     print(
                         f"[Inference] {inference_counter} / {args.tile_count} tiles processed"
                     )
+                tracker.mark_inferenced(base_name)
 
             run_parallel_polygonization(written_tif_paths)
 
@@ -797,9 +820,7 @@ def inference_watcher():
 
             processed_in_chunk += len(written_tif_paths)
             if processed_in_chunk >= CHUNK_SIZE:
-                print(
-                    f"[Inference] Processed {CHUNK_SIZE} images, exiting for restart."
-                )
+                print("[Inference] Processed 20 images, exiting for restart.")
                 gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
@@ -807,21 +828,18 @@ def inference_watcher():
 
 
 def download_partition(
-    tile_subset, args, wms, margin_m, downloader, image_path, state, skip_tiles
+    tile_subset, args, wms, margin_m, downloader, image_path, state, tracker
 ):
     for _, row in tile_subset.iterrows():
         if stop_signal.is_set():
             print("[Download] Stop signal received. Exiting thread.")
             return
         try:
-            utm_bounding_box = row.geometry
-            ulx = int(round(utm_bounding_box.bounds[0] / 1000) * 1000)
-            uly = int(round(utm_bounding_box.bounds[1] / 1000) * 1000)
-            prefix = f"{ulx}_{uly}"
-            tile_id = f"image_32_{prefix}"
+            ulx = int(round(row.geometry.bounds[0] / 1000) * 1000)
+            uly = int(round(row.geometry.bounds[1] / 1000) * 1000)
+            tile_id = f"image_32_{ulx}_{uly}"
 
-            # ✅ Überspringe, wenn Ergebnis schon existiert
-            if tile_id in skip_tiles:
+            if tracker.contains(tile_id):
                 with state.lock:
                     state.counter += 1
                     print(
@@ -830,27 +848,26 @@ def download_partition(
                 continue
 
             path = image_path / f"{tile_id}.tiff"
-
-            minx, miny, maxx, maxy = utm_bounding_box.buffer(margin_m).bounds
-            width_px = int((maxx - minx) / wms.resolution)
-            height_px = int((maxy - miny) / wms.resolution)
-            # Quadratgröße: den größeren Wert wählen
-            size_px = max(width_px, height_px)
-            width_px = height_px = size_px
+            minx, miny, maxx, maxy = row.geometry.buffer(margin_m).bounds
+            size_px = max(
+                int((maxx - minx) / wms.resolution),
+                int((maxy - miny) / wms.resolution),
+            )
             polygon = box(minx, miny, maxx, maxy)
 
             downloader.download_single_image(
                 img_path=path,
                 bounding_box=polygon,
                 wms=wms,
-                width_px=width_px,
-                height_px=height_px,
+                width_px=size_px,
+                height_px=size_px,
                 driver="GTiff",
             )
 
             with state.lock:
                 state.counter += 1
                 print(f"[Download] {state.counter} / {state.total} tiles completed")
+            tracker.mark_downloaded(tile_id)
 
         except Exception as e:
             print(f"[Download] Error on tile {row.name}: {e}")
@@ -887,7 +904,6 @@ def download_wrapper():
 
     tile_grid = gpd.read_file(args.utm_grid)
     args.tile_count = len(tile_grid)
-
     tile_subsets = np.array_split(tile_grid, 3)
 
     wms = ExtendedWebMapService(
@@ -902,23 +918,10 @@ def download_wrapper():
     margin_m = (args.patch_size * wms.resolution) // 2
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
-    # ✅ Fertig vorhandene Ergebnisse anhand von entropy_maps prüfen
-    entropy_dir = os.path.join(args.output_path, "entropy_maps")
-    already_done = {
-        f.replace("_entropy_basic.tiff", "")
-        for f in os.listdir(entropy_dir)
-        if f.endswith(".tiff")
-    }
-    already_downloaded = {
-        f.replace(".tiff", "")
-        for f in os.listdir(args.image_path)
-        if f.endswith(".tiff")
-    }
-    skip_tiles = already_done.union(already_downloaded)
-
-    # ✅ Fortschritt initialisieren
+    # ✅ Use ProcessedTiles tracker
+    tracker = ProcessedTiles(output_path=args.output_path, image_path=args.image_path)
     state = DownloadState(total=args.tile_count)
-    state.counter = len(already_done)
+    state.counter = tracker.count()
 
     threads = []
     for i, subset in enumerate(tile_subsets):
@@ -932,7 +935,7 @@ def download_wrapper():
                 downloader,
                 image_path,
                 state,
-                skip_tiles,
+                tracker,
             ),
             name=f"Downloader-{i+1}",
         )
