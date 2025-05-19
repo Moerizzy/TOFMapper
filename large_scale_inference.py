@@ -934,10 +934,11 @@ def download_wrapper():
     margin_m = (args.patch_size * wms.resolution) // 2
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
-    # ✅ Use ProcessedTiles tracker
-    tracker_download = ProcessedTiles.from_entropy_and_image_dirs(
-        entropy_dir, args.image_path
+    tracker_download = ProcessedTiles()
+    tracker_download.tiles.update(
+        ProcessedTiles.from_entropy_dir(args.output_path).tiles
     )
+    tracker_download.tiles.update(ProcessedTiles.from_image_dir(args.image_path).tiles)
 
     state = DownloadState(total=args.tile_count)
     state.counter = tracker_download.count()
