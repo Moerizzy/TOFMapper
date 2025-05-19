@@ -177,14 +177,17 @@ class ProcessedTiles:
         return instance
 
     @classmethod
-    def from_image_dir(cls, image_dir):
-        instance = cls()
-        image_dir = Path(image_dir)
-        if image_dir.exists():
+    def from_entropy_and_image_dirs(cls, entropy_dir, image_dir):
+        self = cls()
+        if Path(entropy_dir).exists():
+            for f in os.listdir(entropy_dir):
+                if f.endswith("_entropy_basic.tiff"):
+                    self.tiles.add(f.replace("_entropy_basic.tiff", ""))
+        if Path(image_dir).exists():
             for f in os.listdir(image_dir):
                 if f.endswith(".tiff"):
-                    instance.tiles.add(f.replace(".tiff", ""))
-        return instance
+                    self.tiles.add(f.replace(".tiff", ""))
+        return self
 
     @classmethod
     def from_dirs(cls, entropy_dir, image_dir):
@@ -941,7 +944,9 @@ def download_wrapper():
     margin_m = (args.patch_size * wms.resolution) // 2
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
-    tracker_download = ProcessedTiles.from_dirs(args.output_path, args.image_path)
+    tracker_download = ProcessedTiles.from_entropy_and_image_dirs(
+        args.output_path, args.image_path
+    )
 
     state = DownloadState(total=args.tile_count)
     state.counter = tracker_download.count()
