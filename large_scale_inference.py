@@ -970,17 +970,21 @@ if __name__ == "__main__":
     t1 = threading.Thread(target=download_wrapper)
     t1.start()
 
-    while not stop_signal.is_set():
+    while True:
         stop_signal.clear()
 
-        # Start inference thread
+        # 🔄 Counter zurücksetzen, damit Watchdog korrekt überwacht
+        inference_counter = 0
+
+        # Inferenz-Thread starten
         t2 = threading.Thread(target=inference_watcher)
         t2.start()
 
-        # Start watchdog thread
+        # Watchdog starten
         watchdog = threading.Thread(target=inference_watchdog)
         watchdog.start()
 
+        # Auf Threads warten
         t2.join()
         watchdog.join()
 
