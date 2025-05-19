@@ -628,6 +628,7 @@ def aggregate_uncertainty_by_filename(
 
 def inference_watcher():
     global inference_counter
+    stop_signal.clear()  # ensure clean state at start
 
     CHUNK_SIZE = 20
     processed_in_chunk = 0
@@ -945,51 +946,49 @@ def download_wrapper():
     download_done.set()
 
 
-def inference_watchdog(timeout=50):
-    global inference_counter
-    last_count = inference_counter
-    last_change_time = time.time()
+def inference_watchdog(interval=10, timeout=50):
+    """
+    Monitors inference progress. If no progress is made within `timeout` seconds,
+    it sets the stop_signal to trigger a restart.
+    """
+    last_progress = inference_counter
+    last_update_time = time.time()
 
-    while not stop_signal.is_set():
-        time.sleep(30)
-        with inference_lock:
-            current = inference_counter
+    while not download_done.is_set():
+        time.sleep(interval)
 
-        if current > last_count:
-            last_count = current
-            last_change_time = time.time()
-        elif time.time() - last_change_time > timeout:
+        if stop_signal.is_set():
+            return  # Inference is already being restarted
+
+        current_progress = inference_counter
+        if current_progress > last_progress:
+            last_progress = current_progress
+            last_update_time = time.time()
+        elif time.time() - last_update_time > timeout:
             print("[Watchdog] No progress detected. Triggering inference restart.")
             stop_signal.set()
-            break
+            return  # Exit the watchdog once it triggered a restart
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
 
+    # Start download thread
     t1 = threading.Thread(target=download_wrapper)
     t1.start()
 
-    while True:
-        stop_signal.clear()
+    # Starte den Watchdog dauerhaft separat
+    watchdog_thread = threading.Thread(target=inference_watchdog, daemon=True)
+    watchdog_thread.start()
 
-        # 🔄 Counter zurücksetzen, damit Watchdog korrekt überwacht
-        inference_counter = 0
-
-        # Inferenz-Thread starten
+    while not stop_signal.is_set():
         t2 = threading.Thread(target=inference_watcher)
         t2.start()
-
-        # Watchdog starten
-        watchdog = threading.Thread(target=inference_watchdog)
-        watchdog.start()
-
-        # Auf Threads warten
         t2.join()
-        watchdog.join()
 
         if download_done.is_set():
             print("✅ Alle Bilder heruntergeladen und inferiert.")
             break
 
         print("[Main] Neustart der Inferenz nach CHUNK.")
+        stop_signal.clear()  # Reset for next inference cycle
