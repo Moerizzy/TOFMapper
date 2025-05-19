@@ -27,10 +27,7 @@ save_top_k = 1
 save_last = False
 check_val_every_n_epoch = 1
 pretrained_ckpt_path = None  # the path for the pretrained model weight
-gpus = [
-    3,
-    4,
-]  # "auto"  # default or gpu ids:[0] or gpu nums: 2, more setting can refer to pytorch_lightning
+gpus = "gpu nums: 2"  # "auto"  # default or gpu ids:[0] or gpu nums: 2, more setting can refer to pytorch_lightning
 resume_ckpt_path = None  # whether continue training with the checkpoint, default None
 
 #  define the network
