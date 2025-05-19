@@ -186,6 +186,13 @@ class ProcessedTiles:
                     instance.tiles.add(f.replace(".tiff", ""))
         return instance
 
+    @classmethod
+    def from_dirs(cls, entropy_dir, image_dir):
+        instance = cls()
+        instance.tiles.update(cls.from_entropy_dir(entropy_dir).tiles)
+        instance.tiles.update(cls.from_image_dir(image_dir).tiles)
+        return instance
+
     def add(self, tile_id):
         with self.lock:
             self.tiles.add(tile_id)
@@ -934,11 +941,7 @@ def download_wrapper():
     margin_m = (args.patch_size * wms.resolution) // 2
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
-    tracker_download = ProcessedTiles()
-    tracker_download.tiles.update(
-        ProcessedTiles.from_entropy_dir(args.output_path).tiles
-    )
-    tracker_download.tiles.update(ProcessedTiles.from_image_dir(args.image_path).tiles)
+    tracker_download = ProcessedTiles.from_dirs(args.output_path, args.image_path)
 
     state = DownloadState(total=args.tile_count)
     state.counter = tracker_download.count()
