@@ -864,11 +864,9 @@ def download_partition(
             tile_id = f"image_32_{ulx}_{uly}"
 
             if tracker_download.contains(tile_id):
-                with state.lock:
-                    state.counter += 1
-                    print(
-                        f"[Download] Skipped tile {tile_id} ({state.counter} / {state.total})"
-                    )
+                print(
+                    f"[Download] Skipped tile {tile_id} ({state.counter} / {state.total})"
+                )
                 continue
 
             path = image_path / f"{tile_id}.tiff"
