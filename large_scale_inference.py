@@ -166,22 +166,35 @@ class ProcessedTiles:
         self.lock = threading.Lock()
         self.tiles = set()
 
-    def load_from_outputs(self, output_dir):
-        entropy_dir = Path(output_dir) / "entropy_maps"
+    @classmethod
+    def from_entropy_dir(cls, entropy_dir):
+        instance = cls()
+        entropy_dir = Path(entropy_dir)
         if entropy_dir.exists():
             for f in os.listdir(entropy_dir):
                 if f.endswith("_entropy_basic.tiff"):
-                    self.tiles.add(f.replace("_entropy_basic.tiff", ""))
+                    instance.tiles.add(f.replace("_entropy_basic.tiff", ""))
+        return instance
+
+    @classmethod
+    def from_image_dir(cls, image_dir):
+        instance = cls()
+        image_dir = Path(image_dir)
+        if image_dir.exists():
+            for f in os.listdir(image_dir):
+                if f.endswith(".tiff"):
+                    instance.tiles.add(f.replace(".tiff", ""))
+        return instance
 
     def add(self, tile_id):
         with self.lock:
             self.tiles.add(tile_id)
 
-    def __contains__(self, tile_id):
+    def contains(self, tile_id):
         with self.lock:
             return tile_id in self.tiles
 
-    def size(self):
+    def count(self):
         with self.lock:
             return len(self.tiles)
 
@@ -677,8 +690,8 @@ def inference_watcher():
     entropy_subfolder = os.path.join(args.output_path, "entropy_maps")
     os.makedirs(entropy_subfolder, exist_ok=True)
 
-    tracker = ProcessedTiles(output_path=args.output_path, image_path=args.image_path)
-    inference_counter = tracker.count()
+    tracker_inference = ProcessedTiles().from_entropy_dir(entropy_subfolder)
+    inference_counter = tracker_inference.count()
 
     while True:
         if stop_signal.is_set():
@@ -693,7 +706,8 @@ def inference_watcher():
         new_files = [
             f
             for f in all_files
-            if not tracker.contains(os.path.splitext(f)[0]) and f not in processed
+            if not tracker_inference.contains(os.path.splitext(f)[0])
+            and f not in processed
         ]
 
         if not new_files:
@@ -802,7 +816,7 @@ def inference_watcher():
                     print(
                         f"[Inference] {inference_counter} / {args.tile_count} tiles processed"
                     )
-                tracker.mark_inferenced(base_name)
+                tracker_inference.add(base_name)
 
             run_parallel_polygonization(written_tif_paths)
 
@@ -828,7 +842,7 @@ def inference_watcher():
 
 
 def download_partition(
-    tile_subset, args, wms, margin_m, downloader, image_path, state, tracker
+    tile_subset, args, wms, margin_m, downloader, image_path, state, tracker_download
 ):
     for _, row in tile_subset.iterrows():
         if stop_signal.is_set():
@@ -839,7 +853,7 @@ def download_partition(
             uly = int(round(row.geometry.bounds[1] / 1000) * 1000)
             tile_id = f"image_32_{ulx}_{uly}"
 
-            if tracker.contains(tile_id):
+            if tracker_download.contains(tile_id):
                 with state.lock:
                     state.counter += 1
                     print(
@@ -863,11 +877,13 @@ def download_partition(
                 height_px=size_px,
                 driver="GTiff",
             )
+            # Mark as downloaded
+            tracker_download.add(tile_id)
 
+            # Update progress
             with state.lock:
                 state.counter += 1
                 print(f"[Download] {state.counter} / {state.total} tiles completed")
-            tracker.mark_downloaded(tile_id)
 
         except Exception as e:
             print(f"[Download] Error on tile {row.name}: {e}")
@@ -919,9 +935,12 @@ def download_wrapper():
     downloader = ImageDownloader(wms, grid_spacing=1000)
 
     # ✅ Use ProcessedTiles tracker
-    tracker = ProcessedTiles(output_path=args.output_path, image_path=args.image_path)
+    tracker_download = ProcessedTiles.from_entropy_and_image_dirs(
+        entropy_dir, args.image_path
+    )
+
     state = DownloadState(total=args.tile_count)
-    state.counter = tracker.count()
+    state.counter = tracker_download.count()
 
     threads = []
     for i, subset in enumerate(tile_subsets):
@@ -935,7 +954,7 @@ def download_wrapper():
                 downloader,
                 image_path,
                 state,
-                tracker,
+                tracker_download,
             ),
             name=f"Downloader-{i+1}",
         )
