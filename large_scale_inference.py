@@ -945,15 +945,44 @@ def download_wrapper():
     download_done.set()
 
 
+def inference_watchdog(timeout=50):
+    global inference_counter
+    last_count = inference_counter
+    last_change_time = time.time()
+
+    while not stop_signal.is_set():
+        time.sleep(30)
+        with inference_lock:
+            current = inference_counter
+
+        if current > last_count:
+            last_count = current
+            last_change_time = time.time()
+        elif time.time() - last_change_time > timeout:
+            print("[Watchdog] No progress detected. Triggering inference restart.")
+            stop_signal.set()
+            break
+
+
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
+
     t1 = threading.Thread(target=download_wrapper)
     t1.start()
 
     while not stop_signal.is_set():
+        stop_signal.clear()
+
+        # Start inference thread
         t2 = threading.Thread(target=inference_watcher)
         t2.start()
+
+        # Start watchdog thread
+        watchdog = threading.Thread(target=inference_watchdog)
+        watchdog.start()
+
         t2.join()
+        watchdog.join()
 
         if download_done.is_set():
             print("✅ Alle Bilder heruntergeladen und inferiert.")
