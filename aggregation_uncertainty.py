@@ -84,7 +84,7 @@ def main():
     grid = gpd.read_file(args.grid_path)
     raster_dir = Path(args.raster_dir)
 
-    raster_files = list(raster_dir.glob("*.tif"))
+    raster_files = list(raster_dir.glob("*.tiff"))
 
     print(f"[INFO] Found {len(raster_files)} raster files in {raster_dir}")
 
