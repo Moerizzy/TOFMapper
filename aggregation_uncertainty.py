@@ -10,7 +10,7 @@ def extract_coords_from_filename(filename):
     """
     Extract x_sw and y_sw from filename like 'image_32_327000_5605000.tiff'
     """
-    match = re.search(r"image_32_(\d{3})000_(\d{4})000\.tiff", filename)
+    match = re.search(r"image_32_(\d{3})000_(\d{4})000\entropy_basic.tiff", filename)
     if match:
         x_sw = int(match.group(1)) * 1000
         y_sw = int(match.group(2)) * 1000
