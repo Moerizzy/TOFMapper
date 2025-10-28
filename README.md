@@ -1,14 +1,13 @@
 ## Introduction
 
-**TOFMapper** is an open-source  semantic segmentation toolbox based on PyTorch, [pytorch lightning](https://www.pytorchlightning.ai/) and [timm](https://github.com/rwightman/pytorch-image-models), 
-which mainly focuses on mapping and classifying Trees outside Forest in high resolution aerial images. 
+**TOFMapper** is an semantic segmentation tool for mapping and classifying Trees outside Forest in high resolution aerial images. 
 
 
 ## Major Features
 
 - Segmentation and classification of aerial imagery into four trees outside forest classes (Forest, Patch, Linear, Tree)
 - Six trained models [available](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
-- Can handle large inference images by slicing and stitching patches and neighboring images prevending edge effects
+- Can handle large inference images by slicing and stitching patches and neighboring images preventing edge effects
 
 ## Supported Networks
 
@@ -76,8 +75,6 @@ pip install -r TOFMapper/requirements.txt
 | FT-UNetFormer   | **0.739** | **0.843** | 0.952      | **0.975** | **0.606** | **0.754** | **0.774**  | **0.872** | **0.626** | **0.770** |
 | LSKNet          | 0.697 | 0.812 | 0.943      | 0.971     | 0.545     | 0.705    | 0.718      | 0.836     | 0.582    | 0.736   |
 | U-Net           | 0.484 | 0.618 | 0.804      | 0.891     | 0.151     | 0.263    | 0.527      | 0.690     | 0.456    | 0.626   |
-
-[More detailed Information](https://myshare.uni-osnabrueck.de/f/e5b13f907518459e9a1a/)
 
 [Download Model Weights](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
 
@@ -201,7 +198,7 @@ Comming soon!
 
 ## Acknowledgement
 
-Many thanks to [Libo Wang](https://github.com/WangLibo1995) for creating [TOFSeg](https://github.com/WangLibo1995/GeoSeg), which served as the foundation for this project.
+Many thanks to [Libo Wang](https://github.com/WangLibo1995) for creating [GeoSeg](https://github.com/WangLibo1995/GeoSeg), which served as the foundation for this project.
 
 - [TOFMapper](https://github.com/WangLibo1995/TOFMapper)
 - [pytorch lightning](https://www.pytorchlightning.ai/)
