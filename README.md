@@ -6,7 +6,6 @@
 ## Major Features
 
 - Segmentation and classification of aerial imagery into four trees outside forest classes (Forest, Patch, Linear, Tree)
-- Six trained models [available](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
 - Can handle large inference images by slicing and stitching patches and neighboring images preventing edge effects
 
 ## Supported Networks
@@ -76,13 +75,11 @@ pip install -r TOFMapper/requirements.txt
 | LSKNet          | 0.697 | 0.812 | 0.943      | 0.971     | 0.545     | 0.705    | 0.718      | 0.836     | 0.582    | 0.736   |
 | U-Net           | 0.484 | 0.618 | 0.804      | 0.891     | 0.151     | 0.263    | 0.527      | 0.690     | 0.456    | 0.626   |
 
-[Download Model Weights](https://myshare.uni-osnabrueck.de/d/1926bba15b42484282fc/)
-
 ## Data Preprocessing
 
-### Download Reference Data
+### Data Set
 
-Download the reference data created for model training [here](https://myshare.uni-osnabrueck.de/d/c8ec072f5f06426d90c8/).
+Get access to the dataset created for model training [here](https://zenodo.org/records/17468859).
 
 ### Create Reference Data (optional)
 
