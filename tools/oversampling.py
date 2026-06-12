@@ -18,7 +18,6 @@ import torch
 from PIL import Image
 from torch.utils.data import WeightedRandomSampler
 
-
 # Must match `CLASSES` in tof_dataset_multiband_norm.py
 NUM_CLASSES = 5  # 0=Background, 1=Forest, 2=Patch, 3=Linear, 4=Tree
 
@@ -127,7 +126,10 @@ def make_weighted_sampler_for_concat(
             )
 
     ids, freqs = _gather_region_freqs(
-        data_root, regions, mask_dir=mask_dir, mask_suffix=mask_suffix,
+        data_root,
+        regions,
+        mask_dir=mask_dir,
+        mask_suffix=mask_suffix,
         rebuild_cache=rebuild_cache,
     )
     n_total = freqs.shape[0]
@@ -157,15 +159,21 @@ def make_weighted_sampler_for_concat(
 
     if verbose:
         # Quick stats: effective per-class sampling probability.
-        eff = (tile_weight[:, None] * freqs).sum(axis=0) / max(freqs.mean(axis=0).sum(), 1e-12)
+        eff = (tile_weight[:, None] * freqs).sum(axis=0) / max(
+            freqs.mean(axis=0).sum(), 1e-12
+        )
         print(f"[oversampling] tiles={n_total}  method={method}")
-        print(f"[oversampling] global class freq:        "
-              + ", ".join(f"{i}:{v:.4f}" for i, v in enumerate(freqs.mean(axis=0))))
+        print(
+            f"[oversampling] global class freq:        "
+            + ", ".join(f"{i}:{v:.4f}" for i, v in enumerate(freqs.mean(axis=0)))
+        )
         # Effective class fraction expected per epoch.
         sampled_class_frac = (tile_weight[:, None] * freqs).sum(axis=0) * n_total
         sampled_class_frac = sampled_class_frac / max(sampled_class_frac.sum(), 1e-12)
-        print(f"[oversampling] expected sampled freq:    "
-              + ", ".join(f"{i}:{v:.4f}" for i, v in enumerate(sampled_class_frac)))
+        print(
+            f"[oversampling] expected sampled freq:    "
+            + ", ".join(f"{i}:{v:.4f}" for i, v in enumerate(sampled_class_frac))
+        )
 
     return WeightedRandomSampler(
         weights=torch.from_numpy(tile_weight).double(),

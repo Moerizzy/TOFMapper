@@ -28,22 +28,42 @@ from rasterio.warp import reproject, Resampling
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--state", type=str, required=True,
-                        help="Site folder name under data/sites/")
-    parser.add_argument("--data-root", type=str, default="data/sites",
-                        help="Root containing per-state subfolders.")
-    parser.add_argument("--top-dir", type=str, default="TOP",
-                        help="RGBI subfolder name (files: TOP_<id>.tif).")
-    parser.add_argument("--ndsm-dir", type=str, default="nDSM",
-                        help="nDSM subfolder name (files: nDSM_<id>.tif).")
-    parser.add_argument("--out-dir", type=str, default="RGBN_nDSM",
-                        help="Output subfolder name (files: <id>.tif).")
-    parser.add_argument("--ndsm-min", type=float, default=0.0,
-                        help="Lower clip for nDSM in meters.")
-    parser.add_argument("--ndsm-max", type=float, default=50.0,
-                        help="Upper clip for nDSM in meters.")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="Overwrite existing output files.")
+    parser.add_argument(
+        "--state", type=str, required=True, help="Site folder name under data/sites/"
+    )
+    parser.add_argument(
+        "--data-root",
+        type=str,
+        default="data/sites",
+        help="Root containing per-state subfolders.",
+    )
+    parser.add_argument(
+        "--top-dir",
+        type=str,
+        default="TOP",
+        help="RGBI subfolder name (files: TOP_<id>.tif).",
+    )
+    parser.add_argument(
+        "--ndsm-dir",
+        type=str,
+        default="nDSM",
+        help="nDSM subfolder name (files: nDSM_<id>.tif).",
+    )
+    parser.add_argument(
+        "--out-dir",
+        type=str,
+        default="RGBN_nDSM",
+        help="Output subfolder name (files: <id>.tif).",
+    )
+    parser.add_argument(
+        "--ndsm-min", type=float, default=0.0, help="Lower clip for nDSM in meters."
+    )
+    parser.add_argument(
+        "--ndsm-max", type=float, default=50.0, help="Upper clip for nDSM in meters."
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing output files."
+    )
     return parser.parse_args()
 
 
@@ -90,8 +110,10 @@ def build_one(top_path, ndsm_path, out_path, ndsm_min, ndsm_max, overwrite):
         reproject(
             source=rasterio.band(src_ndsm, 1),
             destination=ndsm_aligned,
-            src_transform=src_ndsm.transform, src_crs=src_ndsm.crs,
-            dst_transform=dst_transform, dst_crs=dst_crs,
+            src_transform=src_ndsm.transform,
+            src_crs=src_ndsm.crs,
+            dst_transform=dst_transform,
+            dst_crs=dst_crs,
             resampling=Resampling.bilinear,
         )
 
@@ -134,8 +156,9 @@ def main():
         raise FileNotFoundError(f"nDSM folder not found: {ndsm_dir}")
     os.makedirs(out_dir, exist_ok=True)
 
-    top_files = sorted(f for f in os.listdir(top_dir)
-                       if f.startswith("TOP_") and f.endswith(".tif"))
+    top_files = sorted(
+        f for f in os.listdir(top_dir) if f.startswith("TOP_") and f.endswith(".tif")
+    )
     if not top_files:
         raise RuntimeError(f"No TOP_*.tif files found in {top_dir}")
 
@@ -143,7 +166,7 @@ def main():
 
     n_ok = n_skip = n_missing = 0
     for i, top_name in enumerate(top_files, 1):
-        tile_id = top_name[len("TOP_"):-len(".tif")]
+        tile_id = top_name[len("TOP_") : -len(".tif")]
         ndsm_name = f"nDSM_{tile_id}.tif"
         top_path = os.path.join(top_dir, top_name)
         ndsm_path = os.path.join(ndsm_dir, ndsm_name)
@@ -155,8 +178,11 @@ def main():
             continue
 
         status = build_one(
-            top_path, ndsm_path, out_path,
-            ndsm_min=args.ndsm_min, ndsm_max=args.ndsm_max,
+            top_path,
+            ndsm_path,
+            out_path,
+            ndsm_min=args.ndsm_min,
+            ndsm_max=args.ndsm_max,
             overwrite=args.overwrite,
         )
         if status == "ok":

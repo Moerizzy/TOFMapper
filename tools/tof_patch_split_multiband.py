@@ -49,17 +49,30 @@ def parse_args():
     p.add_argument("--mask-dir", required=True)
     p.add_argument("--output-img-dir", required=True)
     p.add_argument("--output-mask-dir", required=True)
-    p.add_argument("--img-prefix", default="",
-                   help="Optional prefix on image filenames to strip when matching ids.")
-    p.add_argument("--mask-prefix", default="",
-                   help="Optional prefix on mask filenames to strip when matching ids.")
+    p.add_argument(
+        "--img-prefix",
+        default="",
+        help="Optional prefix on image filenames to strip when matching ids.",
+    )
+    p.add_argument(
+        "--mask-prefix",
+        default="",
+        help="Optional prefix on mask filenames to strip when matching ids.",
+    )
     p.add_argument("--mode", choices=["train", "val", "test"], default="train")
     p.add_argument("--split-size", type=int, default=1024)
     p.add_argument("--stride", type=int, default=1024)
-    p.add_argument("--drop-empty", action="store_true",
-                   help="Skip tiles whose mask is entirely background (class 0).")
-    p.add_argument("--ignore-index", type=int, default=255,
-                   help="Padding fill value for masks (default 255).")
+    p.add_argument(
+        "--drop-empty",
+        action="store_true",
+        help="Skip tiles whose mask is entirely background (class 0).",
+    )
+    p.add_argument(
+        "--ignore-index",
+        type=int,
+        default=255,
+        help="Padding fill value for masks (default 255).",
+    )
     return p.parse_args()
 
 
@@ -70,7 +83,7 @@ def list_ids(folder, prefix):
             continue
         stem = os.path.splitext(f)[0]
         if prefix and stem.startswith(prefix):
-            tile_id = stem[len(prefix):]
+            tile_id = stem[len(prefix) :]
         else:
             tile_id = stem
         out[tile_id] = os.path.join(folder, f)
@@ -139,7 +152,9 @@ def process_one(tile_id, img_path, mask_path, args, m_values):
         msk_profile = src_msk.profile.copy()
 
     if img.shape[-2:] != msk.shape[-2:]:
-        print(f"  [{tile_id}] shape mismatch img={img.shape} mask={msk.shape}, skipping")
+        print(
+            f"  [{tile_id}] shape mismatch img={img.shape} mask={msk.shape}, skipping"
+        )
         return 0
 
     img = pad_to_multiple(img, args.split_size, fill=0)
@@ -154,19 +169,15 @@ def process_one(tile_id, img_path, mask_path, args, m_values):
         k = 0
         for y in range(0, H - args.split_size + 1, args.stride):
             for x in range(0, W - args.split_size + 1, args.stride):
-                img_tile = img_v[:, y:y + args.split_size, x:x + args.split_size]
-                msk_tile = msk_v[y:y + args.split_size, x:x + args.split_size]
+                img_tile = img_v[:, y : y + args.split_size, x : x + args.split_size]
+                msk_tile = msk_v[y : y + args.split_size, x : x + args.split_size]
 
                 if args.drop_empty and not np.any(msk_tile != 0):
                     k += 1
                     continue
 
-                out_img = os.path.join(
-                    args.output_img_dir, f"{tile_id}_{m}_{k}.tif"
-                )
-                out_msk = os.path.join(
-                    args.output_mask_dir, f"{tile_id}_{m}_{k}.tif"
-                )
+                out_img = os.path.join(args.output_img_dir, f"{tile_id}_{m}_{k}.tif")
+                out_msk = os.path.join(args.output_mask_dir, f"{tile_id}_{m}_{k}.tif")
                 write_tile(out_img, img_tile, img_profile, dtype="uint8")
                 write_tile(out_msk, msk_tile, msk_profile, dtype="uint8")
                 n_written += 1
@@ -188,9 +199,13 @@ def main():
 
     print(f"images={len(img_map)} masks={len(msk_map)} paired={len(common)}")
     if only_img:
-        print(f"  WARN images without mask: {only_img[:5]}{' ...' if len(only_img) > 5 else ''}")
+        print(
+            f"  WARN images without mask: {only_img[:5]}{' ...' if len(only_img) > 5 else ''}"
+        )
     if only_msk:
-        print(f"  WARN masks without image: {only_msk[:5]}{' ...' if len(only_msk) > 5 else ''}")
+        print(
+            f"  WARN masks without image: {only_msk[:5]}{' ...' if len(only_msk) > 5 else ''}"
+        )
 
     m_values = [0, 1, 2, 3] if args.mode == "train" else [0]
 

@@ -28,39 +28,45 @@ def build_region_datasets(data_root, band_indices, regions=REGIONS):
 
     train_list, val_list, test_list = [], [], []
     for region in regions:
-        train_list.append(TOFDataset(
-            data_root=f"{data_root}/{region}/train",
-            mode="test",  # disables mosaic, matches existing convention
-            transform=train_aug_fn,
-            img_dir="images_1024",
-            img_suffix=".tif",
-            mask_dir="masks_1024",
-            mask_suffix=".tif",
-            img_size=(1024, 1024),
-            band_indices=band_indices,
-        ))
-        val_list.append(TOFDataset(
-            data_root=f"{data_root}/{region}/val",
-            mode="val",
-            transform=val_aug_fn,
-            img_dir="images_1024",
-            img_suffix=".tif",
-            mask_dir="masks_1024",
-            mask_suffix=".tif",
-            img_size=(1024, 1024),
-            band_indices=band_indices,
-        ))
-        test_list.append(TOFDataset(
-            data_root=f"{data_root}/{region}/test",
-            mode="test",
-            transform=val_aug_fn,
-            img_dir="images",
-            img_suffix=".tif",
-            mask_dir="masks",
-            mask_suffix="_mask.tif",
-            img_size=(5000, 5000),
-            band_indices=band_indices,
-        ))
+        train_list.append(
+            TOFDataset(
+                data_root=f"{data_root}/{region}/train",
+                mode="test",  # disables mosaic, matches existing convention
+                transform=train_aug_fn,
+                img_dir="images_1024",
+                img_suffix=".tif",
+                mask_dir="masks_1024",
+                mask_suffix=".tif",
+                img_size=(1024, 1024),
+                band_indices=band_indices,
+            )
+        )
+        val_list.append(
+            TOFDataset(
+                data_root=f"{data_root}/{region}/val",
+                mode="val",
+                transform=val_aug_fn,
+                img_dir="images_1024",
+                img_suffix=".tif",
+                mask_dir="masks_1024",
+                mask_suffix=".tif",
+                img_size=(1024, 1024),
+                band_indices=band_indices,
+            )
+        )
+        test_list.append(
+            TOFDataset(
+                data_root=f"{data_root}/{region}/test",
+                mode="test",
+                transform=val_aug_fn,
+                img_dir="images",
+                img_suffix=".tif",
+                mask_dir="masks",
+                mask_suffix="_mask.tif",
+                img_size=(5000, 5000),
+                band_indices=band_indices,
+            )
+        )
 
     return (
         ConcatDataset(train_list),

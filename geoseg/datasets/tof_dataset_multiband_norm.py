@@ -20,6 +20,7 @@ ORIGIN_IMG_SIZE = (1024, 1024)
 INPUT_IMG_SIZE = (1024, 1024)
 TEST_IMG_SIZE = (5000, 5000)
 
+
 class ColorJitterRGB(albu.ImageOnlyTransform):
     def __init__(
         self,
@@ -65,7 +66,7 @@ class ColorJitterRGB(albu.ImageOnlyTransform):
 _IMAGENET_RGB_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_RGB_STD = (0.229, 0.224, 0.225)
 _EXTRA_MEAN = sum(_IMAGENET_RGB_MEAN) / 3.0  # ≈ 0.449
-_EXTRA_STD = sum(_IMAGENET_RGB_STD) / 3.0    # ≈ 0.226
+_EXTRA_STD = sum(_IMAGENET_RGB_STD) / 3.0  # ≈ 0.226
 
 
 def imagenet_stats(num_channels):
@@ -77,8 +78,7 @@ def imagenet_stats(num_channels):
     if num_channels < 1:
         raise ValueError(f"num_channels must be >= 1, got {num_channels}")
     if num_channels <= 3:
-        return (_IMAGENET_RGB_MEAN[:num_channels],
-                _IMAGENET_RGB_STD[:num_channels])
+        return (_IMAGENET_RGB_MEAN[:num_channels], _IMAGENET_RGB_STD[:num_channels])
     extra = num_channels - 3
     mean = _IMAGENET_RGB_MEAN + (_EXTRA_MEAN,) * extra
     std = _IMAGENET_RGB_STD + (_EXTRA_STD,) * extra
@@ -87,28 +87,34 @@ def imagenet_stats(num_channels):
 
 def build_train_transform(num_channels):
     mean, std = imagenet_stats(num_channels)
-    return albu.Compose([
-        ColorJitterRGB(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
-        albu.HorizontalFlip(p=0.5),
-        albu.VerticalFlip(p=0.5),
-        albu.RandomRotate90(p=0.5),
-        albu.CoarseDropout(
-            num_holes_range=(1, 4),
-            hole_height_range=(1, 256),
-            hole_width_range=(1, 256),
-            fill=0,
-            fill_mask=0,
-            p=0.5,
-        ),
-        albu.Normalize(mean=mean, std=std, max_pixel_value=255.0),
-    ])
+    return albu.Compose(
+        [
+            ColorJitterRGB(
+                brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5
+            ),
+            albu.HorizontalFlip(p=0.5),
+            albu.VerticalFlip(p=0.5),
+            albu.RandomRotate90(p=0.5),
+            albu.CoarseDropout(
+                num_holes_range=(1, 4),
+                hole_height_range=(1, 256),
+                hole_width_range=(1, 256),
+                fill=0,
+                fill_mask=0,
+                p=0.5,
+            ),
+            albu.Normalize(mean=mean, std=std, max_pixel_value=255.0),
+        ]
+    )
 
 
 def build_val_transform(num_channels):
     mean, std = imagenet_stats(num_channels)
-    return albu.Compose([
-        albu.Normalize(mean=mean, std=std, max_pixel_value=255.0),
-    ])
+    return albu.Compose(
+        [
+            albu.Normalize(mean=mean, std=std, max_pixel_value=255.0),
+        ]
+    )
 
 
 def make_train_aug(num_channels):
@@ -118,6 +124,7 @@ def make_train_aug(num_channels):
         img, mask = np.array(img), np.array(mask)
         out = transform(image=img.copy(), mask=mask.copy())
         return out["image"], out["mask"]
+
     return _aug
 
 
@@ -128,6 +135,7 @@ def make_val_aug(num_channels):
         img, mask = np.array(img), np.array(mask)
         out = transform(image=img.copy(), mask=mask.copy())
         return out["image"], out["mask"]
+
     return _aug
 
 
@@ -250,19 +258,15 @@ class TOFDataset(Dataset):
         ), "Number of images and masks should be the same"
         # Intersect to ensure 1:1 pairing in case of stray files.
         common = sorted(set(img_filename_list) & set(mask_filename_list))
-        assert len(common) == len(img_filename_list), (
-            "Image / mask basenames do not fully overlap after stripping suffixes"
-        )
+        assert len(common) == len(
+            img_filename_list
+        ), "Image / mask basenames do not fully overlap after stripping suffixes"
         return common
 
     def load_img_and_mask(self, index):
         img_id = self.img_ids[index]
-        img_name = osp.join(
-            self.data_root, self.img_dir, img_id + self.img_suffix
-        )
-        mask_name = osp.join(
-            self.data_root, self.mask_dir, img_id + self.mask_suffix
-        )
+        img_name = osp.join(self.data_root, self.img_dir, img_id + self.img_suffix)
+        mask_name = osp.join(self.data_root, self.mask_dir, img_id + self.mask_suffix)
 
         img = load_multiband_image(img_name, band_indices=self.band_indices)
         mask = np.array(Image.open(mask_name))

@@ -9,16 +9,15 @@ from tools.multimodal_datasets import REGIONS, build_region_datasets
 from tools.oversampling import make_weighted_sampler_for_concat
 from tools.utils import Lookahead, process_model_params
 
-
 # ----- experiment ----------------------------------------------------------
 DATA_ROOT = "/tf/TOF_Data_Test/data/organized/ortho_5band"
-BAND_INDICES = (1, 2, 3, 4)      # R, G, B, NIR
+BAND_INDICES = (1, 2, 3, 4)  # R, G, B, NIR
 IN_CHANS = len(BAND_INDICES)
 RUN_TAG = "rgbn"
 
 # Class-aware oversampling on the train set. Disable for a vanilla baseline.
 USE_OVERSAMPLING = True
-OVERSAMPLE_CLASSES = (2, 3, 4)   # Patch, Linear, Tree (rare TOF classes)
+OVERSAMPLE_CLASSES = (2, 3, 4)  # Patch, Linear, Tree (rare TOF classes)
 OVERSAMPLE_METHOD = "inverse_freq"  # or "presence"
 
 # ----- training hparams ----------------------------------------------------
@@ -103,8 +102,12 @@ val_loader = DataLoader(
 )
 
 # ----- optimizer -----------------------------------------------------------
-layerwise_params = {"backbone.*": dict(lr=backbone_lr, weight_decay=backbone_weight_decay)}
+layerwise_params = {
+    "backbone.*": dict(lr=backbone_lr, weight_decay=backbone_weight_decay)
+}
 net_params = process_model_params(net, layerwise_params=layerwise_params)
 base_optimizer = torch.optim.AdamW(net_params, lr=lr, weight_decay=weight_decay)
 optimizer = Lookahead(base_optimizer)
-lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=15, T_mult=2)
+lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer, T_0=15, T_mult=2
+)
