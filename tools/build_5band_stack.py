@@ -23,7 +23,14 @@ import argparse
 import os
 import numpy as np
 import rasterio
+from rasterio.errors import CRSError
 from rasterio.warp import reproject, Resampling
+
+try:
+    # CPLE_NotSupportedError lives here in modern rasterio.
+    from rasterio._err import CPLE_NotSupportedError  # type: ignore
+except Exception:  # pragma: no cover - older rasterio
+    CPLE_NotSupportedError = Exception  # noqa: N816
 
 
 def parse_args():
@@ -107,15 +114,41 @@ def build_one(top_path, ndsm_path, out_path, ndsm_min, ndsm_max, overwrite):
 
     ndsm_aligned = np.zeros((H, W), dtype=np.float32)
     with rasterio.open(ndsm_path) as src_ndsm:
-        reproject(
-            source=rasterio.band(src_ndsm, 1),
-            destination=ndsm_aligned,
-            src_transform=src_ndsm.transform,
-            src_crs=src_ndsm.crs,
-            dst_transform=dst_transform,
-            dst_crs=dst_crs,
-            resampling=Resampling.bilinear,
+        # Fast path: if the nDSM is already on the TOP grid, just read it. This
+        # also rescues files whose GeoTIFF CRS tags PROJ degrades to an
+        # "EngineeringCRS" (no datum), which would otherwise crash reproject.
+        same_grid = (
+            src_ndsm.height == H
+            and src_ndsm.width == W
+            and src_ndsm.transform == dst_transform
         )
+        if same_grid:
+            ndsm_aligned = src_ndsm.read(1).astype(np.float32, copy=False)
+        else:
+            try:
+                reproject(
+                    source=rasterio.band(src_ndsm, 1),
+                    destination=ndsm_aligned,
+                    src_transform=src_ndsm.transform,
+                    src_crs=src_ndsm.crs,
+                    dst_transform=dst_transform,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.bilinear,
+                )
+            except (CPLE_NotSupportedError, CRSError):
+                # Fallback: PROJ can't build a transform between the two CRS
+                # descriptions even though they should be equivalent. Resample
+                # in pixel space, assuming the rasters share a CRS in practice.
+                ndsm_aligned[:] = 0.0
+                reproject(
+                    source=rasterio.band(src_ndsm, 1),
+                    destination=ndsm_aligned,
+                    src_transform=src_ndsm.transform,
+                    src_crs=dst_crs,
+                    dst_transform=dst_transform,
+                    dst_crs=dst_crs,
+                    resampling=Resampling.bilinear,
+                )
 
     ndsm_u8 = ndsm_to_uint8(ndsm_aligned, lo=ndsm_min, hi=ndsm_max)
 
