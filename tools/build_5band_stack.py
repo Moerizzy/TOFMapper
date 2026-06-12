@@ -167,7 +167,7 @@ def main():
     n_ok = n_skip = n_missing = 0
     for i, top_name in enumerate(top_files, 1):
         tile_id = top_name[len("TOP_") : -len(".tif")]
-        ndsm_name = f"nDSM_{tile_id}.tif"
+        ndsm_name = f"nDOM_{tile_id}.tif"
         top_path = os.path.join(top_dir, top_name)
         ndsm_path = os.path.join(ndsm_dir, ndsm_name)
         out_path = os.path.join(out_dir, f"{tile_id}.tif")
