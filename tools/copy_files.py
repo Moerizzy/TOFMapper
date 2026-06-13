@@ -45,14 +45,12 @@ def _tile_id_from_mask(mask_filename):
     base = os.path.basename(mask_filename)
     stem, _ = os.path.splitext(base)
     if stem.startswith("mask_"):
-        stem = stem[len("mask_"):]
+        stem = stem[len("mask_") :]
     return stem
 
 
 def _src_image_path(site, tile_id, img_subdir, img_prefix):
-    return os.path.join(
-        "data", "sites", site, img_subdir, f"{img_prefix}{tile_id}.tif"
-    )
+    return os.path.join("data", "sites", site, img_subdir, f"{img_prefix}{tile_id}.tif")
 
 
 def copy_files(

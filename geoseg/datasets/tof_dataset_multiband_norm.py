@@ -258,7 +258,7 @@ class TOFDataset(Dataset):
                 continue
             if mp and not f.startswith(mp):
                 continue
-            stem = f[len(mp): -len(ms)] if ms else f[len(mp):]
+            stem = f[len(mp) : -len(ms)] if ms else f[len(mp) :]
             mask_filename_list.append(stem)
         assert len(img_filename_list) == len(
             mask_filename_list

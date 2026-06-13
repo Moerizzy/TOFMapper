@@ -77,9 +77,7 @@ def _gather_freqs(
 ) -> tuple[list[str], np.ndarray]:
     """Per-tile freqs in the same order the train dataset will iterate."""
     mdir = os.path.join(data_root, "train", mask_dir)
-    return compute_tile_freqs(
-        mdir, mask_suffix=mask_suffix, rebuild=rebuild_cache
-    )
+    return compute_tile_freqs(mdir, mask_suffix=mask_suffix, rebuild=rebuild_cache)
 
 
 def make_weighted_sampler(
