@@ -62,6 +62,21 @@ if __name__ == "__main__":
     gdf = gpd.read_file(path_Shape)
     gdf["classvalue"] = gdf["classvalue"].astype(int)
 
+    # Drop rows with missing/empty geometries — rasterio would emit one
+    # ShapeSkipWarning per row otherwise (some sites have thousands).
+    n_before = len(gdf)
+    gdf = gdf[gdf.geometry.notnull() & ~gdf.geometry.is_empty]
+    try:
+        gdf = gdf[gdf.geometry.is_valid]
+    except Exception:
+        pass
+    n_dropped = n_before - len(gdf)
+    if n_dropped:
+        print(
+            f"[{state}] dropped {n_dropped}/{n_before} features "
+            f"with null/empty/invalid geometry"
+        )
+
     # Check if mask folder exists
     if not os.path.exists(f"data/sites/{state}/Masks"):
         os.makedirs(f"data/sites/{state}/Masks")
