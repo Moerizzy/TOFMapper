@@ -46,7 +46,7 @@ def label2rgb(mask):
 
 
 def img_writer(inp):
-    (mask, mask_id, rgb) = inp
+    mask, mask_id, rgb = inp
     if rgb:
         mask_name_tif = mask_id + ".png"
         mask_tif = label2rgb(mask)

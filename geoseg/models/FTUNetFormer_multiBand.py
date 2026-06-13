@@ -1263,17 +1263,25 @@ def ft_unetformer(
         model_dict = model.state_dict()
 
         for k, v in old_dict.items():
-            # Spezialfall: Patch-Embedding Conv von 3 -> 4 Kanäle mappen
+            # Spezialfall: Patch-Embedding Conv von 3 -> N Kanäle mappen
             if k == "backbone.patch_embed.proj.weight":
-                # v: [C_out, 3, k, k]
-                # model_dict[k]: [C_out, 4, k, k]
+                # v:             [C_out, 3, k, k] (Pretrain ist immer RGB)
+                # model_dict[k]: [C_out, N, k, k] (N = in_chans)
                 w_new = model_dict[k].clone()
+                n_new = w_new.shape[1]
 
-                # alte 3 Kanäle übernehmen
-                w_new[:, :3, :, :] = v
-
-                # neuen 4. Kanal = Kopie des roten Kanals (Index 0)
-                w_new[:, 3, :, :] = v[:, 0, :, :]
+                if n_new == 3:
+                    # exakt RGB -> 1:1 übernehmen
+                    w_new = v.clone()
+                elif n_new < 3:
+                    # weniger als 3 Kanäle -> erste n_new Kanäle übernehmen
+                    w_new = v[:, :n_new, :, :].clone()
+                else:
+                    # mehr als 3 Kanäle -> erste 3 von RGB,
+                    # alle weiteren = Kopie des roten Kanals (Index 0)
+                    w_new[:, :3, :, :] = v
+                    for c in range(3, n_new):
+                        w_new[:, c, :, :] = v[:, 0, :, :]
 
                 model_dict[k] = w_new
             else:
