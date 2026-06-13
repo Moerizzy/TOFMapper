@@ -49,6 +49,10 @@ def _tile_id_from_mask(mask_filename):
     return stem
 
 
+def _src_mask_path(site, tile_id):
+    return os.path.join("data", "sites", site, "Masks", f"mask_{tile_id}.tif")
+
+
 def _src_image_path(site, tile_id, img_subdir, img_prefix):
     return os.path.join("data", "sites", site, img_subdir, f"{img_prefix}{tile_id}.tif")
 
@@ -72,11 +76,12 @@ def copy_files(
         if os.path.exists(text_file_path_test):
             with open(text_file_path_test, "r") as file:
                 for line in file:
-                    mask_path = line.strip()
-                    if not mask_path:
+                    mask_path_in_txt = line.strip()
+                    if not mask_path_in_txt:
                         continue
-                    tile_id = _tile_id_from_mask(mask_path)
+                    tile_id = _tile_id_from_mask(mask_path_in_txt)
                     img_path = _src_image_path(site, tile_id, img_subdir, img_prefix)
+                    mask_path = _src_mask_path(site, tile_id)
                     print(f"Copying test image: {img_path}")
                     try:
                         shutil.copy2(img_path, dest_test_images)
@@ -90,11 +95,12 @@ def copy_files(
         if os.path.exists(text_file_path_val):
             with open(text_file_path_val, "r") as file:
                 for line in file:
-                    mask_path = line.strip()
-                    if not mask_path:
+                    mask_path_in_txt = line.strip()
+                    if not mask_path_in_txt:
                         continue
-                    tile_id = _tile_id_from_mask(mask_path)
+                    tile_id = _tile_id_from_mask(mask_path_in_txt)
                     img_path = _src_image_path(site, tile_id, img_subdir, img_prefix)
+                    mask_path = _src_mask_path(site, tile_id)
                     print(f"Copying validation image: {img_path}")
                     try:
                         shutil.copy2(img_path, dest_val_images)
