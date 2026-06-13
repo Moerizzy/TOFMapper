@@ -133,7 +133,7 @@ def main():
     parser.add_argument(
         "--sites",
         nargs="+",
-        default=["BB", "NRW_1", "NRW_3", "SH"],
+        default=["BB", "NRW_N", "NRW_S", "SH"],
         help="List of site names to process.",
     )
     parser.add_argument(
