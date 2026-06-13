@@ -206,6 +206,7 @@ class TOFDataset(Dataset):
         mask_dir="masks_1024",
         img_suffix=".tif",
         mask_suffix=".png",
+        mask_prefix="",
         transform=val_aug,
         mosaic_ratio=0.0,
         img_size=ORIGIN_IMG_SIZE,
@@ -216,6 +217,7 @@ class TOFDataset(Dataset):
         self.mask_dir = mask_dir
         self.img_suffix = img_suffix
         self.mask_suffix = mask_suffix
+        self.mask_prefix = mask_prefix
         self.transform = transform
         self.mode = mode
         self.mosaic_ratio = mosaic_ratio
@@ -248,11 +250,16 @@ class TOFDataset(Dataset):
             for f in os.listdir(osp.join(data_root, img_dir))
             if f.endswith(self.img_suffix)
         ]
-        mask_filename_list = [
-            f[: -len(self.mask_suffix)]
-            for f in os.listdir(osp.join(data_root, mask_dir))
-            if f.endswith(self.mask_suffix)
-        ]
+        mp = self.mask_prefix
+        ms = self.mask_suffix
+        mask_filename_list = []
+        for f in os.listdir(osp.join(data_root, mask_dir)):
+            if not f.endswith(ms):
+                continue
+            if mp and not f.startswith(mp):
+                continue
+            stem = f[len(mp): -len(ms)] if ms else f[len(mp):]
+            mask_filename_list.append(stem)
         assert len(img_filename_list) == len(
             mask_filename_list
         ), "Number of images and masks should be the same"
@@ -266,7 +273,9 @@ class TOFDataset(Dataset):
     def load_img_and_mask(self, index):
         img_id = self.img_ids[index]
         img_name = osp.join(self.data_root, self.img_dir, img_id + self.img_suffix)
-        mask_name = osp.join(self.data_root, self.mask_dir, img_id + self.mask_suffix)
+        mask_name = osp.join(
+            self.data_root, self.mask_dir, self.mask_prefix + img_id + self.mask_suffix
+        )
 
         img = load_multiband_image(img_name, band_indices=self.band_indices)
         mask = np.array(Image.open(mask_name))

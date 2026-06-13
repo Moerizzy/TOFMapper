@@ -1,17 +1,17 @@
 """Class-aware oversampling for the multimodal TOF training pipeline.
 
-Builds a `WeightedRandomSampler` aligned with the ConcatDataset returned by
-`tools.multimodal_datasets.build_region_datasets`, biasing sampling toward
-tiles that contain rare TOF classes (Patch, Linear, Tree).
+Builds a `WeightedRandomSampler` aligned with the train dataset returned by
+`tools.multimodal_datasets.build_datasets`, biasing sampling toward tiles
+that contain rare TOF classes (Patch, Linear, Tree).
 
-Per-tile class histograms are cached to disk (`_class_freq.npz` inside each
+Per-tile class histograms are cached to disk (`_class_freq.npz` inside the
 `masks_1024/` folder) so subsequent runs skip the I/O scan.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Iterable, Sequence
+from typing import Iterable
 
 import numpy as np
 import torch
@@ -69,30 +69,21 @@ def compute_tile_freqs(
     return ids, freqs_arr
 
 
-def _gather_region_freqs(
+def _gather_freqs(
     data_root: str,
-    regions: Sequence[str],
     mask_dir: str = "masks_1024",
     mask_suffix: str = ".tif",
     rebuild_cache: bool = False,
 ) -> tuple[list[str], np.ndarray]:
-    """Concatenate per-region per-tile freqs in the same order ConcatDataset
-    will iterate them. Returns (ids, freqs)."""
-    all_ids: list[str] = []
-    chunks: list[np.ndarray] = []
-    for region in regions:
-        mdir = os.path.join(data_root, region, "train", mask_dir)
-        ids, freqs = compute_tile_freqs(
-            mdir, mask_suffix=mask_suffix, rebuild=rebuild_cache
-        )
-        all_ids.extend(f"{region}/{i}" for i in ids)
-        chunks.append(freqs)
-    return all_ids, np.concatenate(chunks, axis=0)
+    """Per-tile freqs in the same order the train dataset will iterate."""
+    mdir = os.path.join(data_root, "train", mask_dir)
+    return compute_tile_freqs(
+        mdir, mask_suffix=mask_suffix, rebuild=rebuild_cache
+    )
 
 
-def make_weighted_sampler_for_concat(
+def make_weighted_sampler(
     data_root: str,
-    regions: Sequence[str],
     mask_dir: str = "masks_1024",
     mask_suffix: str = ".tif",
     oversample_classes: Iterable[int] = (2, 3, 4),  # Patch, Linear, Tree
@@ -102,15 +93,14 @@ def make_weighted_sampler_for_concat(
     rebuild_cache: bool = False,
     verbose: bool = True,
 ) -> WeightedRandomSampler:
-    """Return a WeightedRandomSampler whose length matches the train
-    ConcatDataset built by `build_region_datasets(data_root, ..., regions)`.
+    """Return a WeightedRandomSampler aligned 1:1 with the train dataset built
+    by `build_datasets(data_root, ...)`.
 
     Parameters
     ----------
     oversample_classes : iterable of int
         Class indices (in 0..NUM_CLASSES-1) that should be upweighted.
     method : "inverse_freq" | "presence"
-        See module docstring for details.
     smooth : float
         Lower bound for tile weights so no tile has zero probability.
     num_samples : int or None
@@ -125,9 +115,8 @@ def make_weighted_sampler_for_concat(
                 f"oversample_classes contains {c}, must be in 0..{NUM_CLASSES - 1}"
             )
 
-    ids, freqs = _gather_region_freqs(
+    ids, freqs = _gather_freqs(
         data_root,
-        regions,
         mask_dir=mask_dir,
         mask_suffix=mask_suffix,
         rebuild_cache=rebuild_cache,

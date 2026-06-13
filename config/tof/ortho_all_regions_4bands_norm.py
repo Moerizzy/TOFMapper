@@ -5,12 +5,12 @@ from torch.utils.data import DataLoader
 from geoseg.losses import *
 from geoseg.datasets.tof_dataset_multiband_norm import CLASSES
 from geoseg.models.FTUNetFormer_multiBand import ft_unetformer
-from tools.multimodal_datasets import REGIONS, build_region_datasets
-from tools.oversampling import make_weighted_sampler_for_concat
+from tools.multimodal_datasets import build_datasets
+from tools.oversampling import make_weighted_sampler
 from tools.utils import Lookahead, process_model_params
 
 # ----- experiment ----------------------------------------------------------
-DATA_ROOT = "/tf/TOF_Data_Test/data/organized/ortho_5band"
+DATA_ROOT = "data/tof"
 BAND_INDICES = (1, 2, 3, 4)  # R, G, B, NIR
 IN_CHANS = len(BAND_INDICES)
 RUN_TAG = "rgbn"
@@ -63,14 +63,13 @@ loss = JointLoss(
 use_aux_loss = False
 
 # ----- data ----------------------------------------------------------------
-train_dataset, val_dataset, test_dataset = build_region_datasets(
+train_dataset, val_dataset, test_dataset = build_datasets(
     data_root=DATA_ROOT, band_indices=BAND_INDICES
 )
 
 if USE_OVERSAMPLING:
-    train_sampler = make_weighted_sampler_for_concat(
+    train_sampler = make_weighted_sampler(
         data_root=DATA_ROOT,
-        regions=REGIONS,
         oversample_classes=OVERSAMPLE_CLASSES,
         method=OVERSAMPLE_METHOD,
     )
