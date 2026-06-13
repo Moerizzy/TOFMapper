@@ -1225,7 +1225,7 @@ class FTUNetFormer(nn.Module):
             depths=depths,
             num_heads=num_heads,
             frozen_stages=freeze_stages,
-            in_chans=in_chans
+            in_chans=in_chans,
         )
         encoder_channels = [embed_dim, embed_dim * 2, embed_dim * 4, embed_dim * 8]
         self.decoder = Decoder(
@@ -1245,7 +1245,7 @@ def ft_unetformer(
     freeze_stages=-1,
     decoder_channels=256,
     weight_path="pretrain_weights/stseg_base.pth",
-    in_chans=4,   # <--- 4 Kanäle
+    in_chans=4,  # <--- 4 Kanäle
 ):
     model = FTUNetFormer(
         num_classes=num_classes,
@@ -1292,4 +1292,3 @@ def ft_unetformer(
         model.load_state_dict(model_dict, strict=False)
 
     return model
-
