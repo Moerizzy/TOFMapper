@@ -225,6 +225,8 @@ def main():
         callbacks=[checkpoint_callback, early_stop_callback],
         strategy=DDPStrategy(find_unused_parameters=True),
         logger=logger,
+        precision=getattr(config, "precision", "32-true"),
+        accumulate_grad_batches=getattr(config, "accumulate_grad_batches", 1),
     )
     trainer.fit(model=model, ckpt_path=config.resume_ckpt_path)
 
