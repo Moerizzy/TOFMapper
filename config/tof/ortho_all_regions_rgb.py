@@ -16,7 +16,7 @@ IN_CHANS = len(BAND_INDICES)
 RUN_TAG = "rgb"
 
 # Class-aware oversampling on the train set. Disable for a vanilla baseline.
-USE_OVERSAMPLING = True
+USE_OVERSAMPLING = False
 OVERSAMPLE_CLASSES = (2, 3, 4)  # Patch, Linear, Tree (rare TOF classes)
 OVERSAMPLE_METHOD = "inverse_freq"  # or "presence"
 
@@ -42,7 +42,7 @@ save_top_k = 1
 save_last = False
 check_val_every_n_epoch = 1
 pretrained_ckpt_path = None
-gpus = [3]
+gpus = [1]
 resume_ckpt_path = None
 
 # ----- model ---------------------------------------------------------------

@@ -1,5 +1,8 @@
-"""RGB + NIR (4 bands), trained on the shared 5-band stack.
-Bands 1, 2, 3, 4 = R, G, B, NIR."""
+"""RGB + NIR + nDSM (5 bands) WITH class-aware oversampling.
+Same data and model as ortho_all_regions_rgbn_ndsm.py; the only difference
+is USE_OVERSAMPLING=True. This is the ablation showing the effect of
+weighted sampling toward Patch / Linear / Tree on top of the richest
+modality."""
 
 from torch.utils.data import DataLoader
 from geoseg.losses import *
@@ -11,13 +14,13 @@ from tools.utils import Lookahead, process_model_params
 
 # ----- experiment ----------------------------------------------------------
 DATA_ROOT = "data/tof"
-BAND_INDICES = (1, 2, 3, 4)  # R, G, B, NIR
+BAND_INDICES = (1, 2, 3, 4, 5)  # R, G, B, NIR, nDSM
 IN_CHANS = len(BAND_INDICES)
-RUN_TAG = "rgbn"
+RUN_TAG = "rgbn_ndsm_oversample"
 
 # Class-aware oversampling on the train set. Disable for a vanilla baseline.
-USE_OVERSAMPLING = False
-OVERSAMPLE_CLASSES = (2, 3, 4)  # Patch, Linear, Tree (rare TOF classes)
+USE_OVERSAMPLING = True
+OVERSAMPLE_CLASSES = (2,)  # Patch only
 OVERSAMPLE_METHOD = "inverse_freq"  # or "presence"
 
 # ----- training hparams ----------------------------------------------------
