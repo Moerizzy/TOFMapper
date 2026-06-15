@@ -245,6 +245,7 @@ def main():
     model = Supervision_Train.load_from_checkpoint(
         os.path.join(config.weights_path, config.test_weights_name + ".ckpt"),
         config=config,
+        map_location="cpu",
     )
     model.cuda()
     model.eval()
