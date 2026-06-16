@@ -57,7 +57,7 @@ if __name__ == "__main__":
     eroded = args.eroded
 
     list_path_RGBI = get_file_list(f"data/sites/{state}/TOP")
-    path_Shape = f"data/sites/{state}/SHP/{state}_TOF.gpkg"
+    path_Shape = f"data/sites/{state}/SHP/{state}_TOF.shp"
 
     gdf = gpd.read_file(path_Shape)
     gdf["classvalue"] = gdf["classvalue"].astype(int)
