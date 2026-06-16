@@ -6,7 +6,7 @@
 #   2. RGB + NIR             (4 bands)
 #   3. RGB + nDSM            (4 bands)
 #   4. RGB + NIR + nDSM      (5 bands)
-#   5. RGB + NIR + nDSM with class-aware oversampling (ablation)
+#   5. RGB with class-aware oversampling on Patch (ablation)
 #
 # After each training, evaluates the best checkpoint on the test set and
 # saves metrics + confusion matrices under runs/<run_tag>/test/.
@@ -40,7 +40,7 @@ declare -a RUN_TAGS=(
     "rgbn"
     "rgb_ndsm"
     "rgbn_ndsm"
-    "rgbn_ndsm_oversample"
+    "rgb_oversample"
 )
 
 declare -A CONFIG_FOR
@@ -48,7 +48,7 @@ CONFIG_FOR[rgb]="$REPO/config/tof/ortho_all_regions_rgb.py"
 CONFIG_FOR[rgbn]="$REPO/config/tof/ortho_all_regions_4bands_norm.py"
 CONFIG_FOR[rgb_ndsm]="$REPO/config/tof/ortho_all_regions_rgb_ndsm.py"
 CONFIG_FOR[rgbn_ndsm]="$REPO/config/tof/ortho_all_regions_rgbn_ndsm.py"
-CONFIG_FOR[rgbn_ndsm_oversample]="$REPO/config/tof/ortho_all_regions_rgbn_ndsm_oversample.py"
+CONFIG_FOR[rgb_oversample]="$REPO/config/tof/ortho_all_regions_rgb_oversample.py"
 
 # --- Parse args ------------------------------------------------------------
 DRY_RUN=0
