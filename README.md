@@ -75,6 +75,8 @@ pip install -r TOFMapper/requirements.txt
 | LSKNet          | 0.697 | 0.812 | 0.943      | 0.971     | 0.545     | 0.705    | 0.718      | 0.836     | 0.582    | 0.736   |
 | U-Net           | 0.484 | 0.618 | 0.804      | 0.891     | 0.151     | 0.263    | 0.527      | 0.690     | 0.456    | 0.626   |
 
+[Download the trained model weights](https://myshare.uni-osnabrueck.de/d/2360edfcd80a453895d5/)
+
 ## Data Preprocessing
 
 ### Data Set
