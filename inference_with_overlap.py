@@ -96,7 +96,6 @@ class InferenceDataset(Dataset):
         )
 
         image = np.moveaxis(combined_image, 0, -1).astype(np.uint8)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         if self.transform:
             augmented = self.transform(image=image)
