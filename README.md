@@ -192,12 +192,16 @@ python TOFMapper/inference_with_overlap.py \
 ## Citation
 
 ```bibtex
-@article{lucas2025mapping,
-  title={Mapping and Classification of Trees Outside Forests using Deep Learning},
-  author={Lucas, Moritz and Ebrahimy, Hamid and Barkov, Viacheslav and Pecenka, Ralf and K{\"u}hnberger, Kai-Uwe and Waske, Bj{\"o}rn},
-  journal={arXiv preprint arXiv:2510.25239},
-  year={2025},
-  doi={10.48550/arXiv.2510.25239}
+@article{LUCAS2026100510,
+title = {Mapping and classification of trees outside forests using deep learning},
+journal = {Science of Remote Sensing},
+volume = {14},
+pages = {100510},
+year = {2026},
+issn = {2666-0172},
+doi = {https://doi.org/10.1016/j.srs.2026.100510},
+url = {https://www.sciencedirect.com/science/article/pii/S2666017226001483},
+author = {Moritz Lucas and Hamid Ebrahimy and Viacheslav Barkov and Ralf Pecenka and Kai-Uwe Kühnberger and Björn Waske}
 }
 ```
 
