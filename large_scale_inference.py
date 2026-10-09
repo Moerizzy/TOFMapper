@@ -259,10 +259,6 @@ class InferenceDataset(Dataset):
         # Convert to (H, W, C)
         image = np.moveaxis(image, 0, -1).astype(np.uint8)
 
-        # Convert to RGB if needed (e.g., BGR → RGB)
-        if image.shape[2] == 3:
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
         # Apply albumentations transform (e.g., normalization)
         if self.transform:
             augmented = self.transform(image=image)
