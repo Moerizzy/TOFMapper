@@ -167,9 +167,8 @@ class InferenceDataset(Dataset):
             neighbors, image_path, output_shape, nodata_value=0
         )
 
-        # Convert CHW (rasterio) to HWC and ensure RGB color space
+        # Convert CHW (rasterio) to HWC (bands are already RGB)
         image = np.moveaxis(combined_image, 0, -1).astype(np.uint8)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # Apply optional normalization/augmentation
         if self.transform:
